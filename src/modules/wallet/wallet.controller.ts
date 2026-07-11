@@ -1,6 +1,8 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ManageTransactions } from '../auth/decorators/check-abilities.decorator';
 import { CurrentUser, CurrentUserData } from '../auth/decorators/current-user.decorator';
+import { AbilitiesGuard } from '../auth/guards/abilities.guard';
 import { DepositDTO } from './dto/deposit.dto';
 import { TransactionResponseDTO } from './dto/transaction-response.dto';
 import { TransferDTO } from './dto/transfer.dto';
@@ -57,5 +59,25 @@ export class WalletController {
     @Body() dto: TransferDTO,
   ): Promise<TransactionResponseDTO> {
     return this.walletService.transfer(user.id, dto);
+  }
+
+  @Post('transactions/:id/reverse')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(AbilitiesGuard)
+  @ManageTransactions()
+  @ApiOperation({ summary: 'Reverter uma transação (somente admin)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Transação revertida com sucesso',
+    type: TransactionResponseDTO,
+  })
+  @ApiResponse({ status: 403, description: 'Sem permissão para reverter transações' })
+  @ApiResponse({ status: 404, description: 'Transação não encontrada' })
+  @ApiResponse({ status: 409, description: 'Transação já revertida' })
+  async reverse(
+    @CurrentUser() user: CurrentUserData,
+    @Param('id') id: string,
+  ): Promise<TransactionResponseDTO> {
+    return this.walletService.reverse(user.id, id);
   }
 }

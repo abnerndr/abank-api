@@ -45,3 +45,6 @@ export const DeletePermissions = () =>
 
 export const ManagePermissions = () =>
   CheckAbilities({ action: Action.MANAGE, subject: Resource.PERMISSION });
+
+export const ManageTransactions = () =>
+  CheckAbilities({ action: Action.MANAGE, subject: Resource.TRANSACTION });

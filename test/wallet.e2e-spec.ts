@@ -333,4 +333,118 @@ describe('Wallet (e2e)', () => {
       expect(senderWallet.body.balance).toBe('70.0000');
     });
   });
+
+  describe('POST /api/wallet/transactions/:id/reverse', () => {
+    it('rejects a non-admin user with 403', async () => {
+      const user = await createAuthenticatedUser(app);
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .send({ amount: '10.00' })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${deposit.body.id}/reverse`)
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .expect(403);
+    });
+
+    it('reverses a deposit, debiting the wallet back', async () => {
+      const admin = await createAuthenticatedUser(app, { roles: ['admin'] });
+      const user = await createAuthenticatedUser(app);
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .send({ amount: '30.00' })
+        .expect(201);
+
+      const reversal = await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${deposit.body.id}/reverse`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+
+      expect(reversal.body.type).toBe('REVERSAL');
+      expect(reversal.body.reversalOfId).toBe(deposit.body.id);
+
+      const wallet = await request(app.getHttpServer())
+        .get('/api/wallet/me')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .expect(200);
+      expect(wallet.body.balance).toBe('0.0000');
+    });
+
+    it('reverses a transfer even if the recipient already spent the money, going negative', async () => {
+      const admin = await createAuthenticatedUser(app, { roles: ['admin'] });
+      const a = await createAuthenticatedUser(app);
+      const b = await createAuthenticatedUser(app);
+      const c = await createAuthenticatedUser(app);
+
+      await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${a.accessToken}`)
+        .send({ amount: '100.00' })
+        .expect(201);
+
+      const transfer = await request(app.getHttpServer())
+        .post('/api/wallet/transfer')
+        .set('Authorization', `Bearer ${a.accessToken}`)
+        .send({ toEmail: b.email, amount: '100.00' })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/api/wallet/transfer')
+        .set('Authorization', `Bearer ${b.accessToken}`)
+        .send({ toEmail: c.email, amount: '100.00' })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${transfer.body.id}/reverse`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+
+      const bWallet = await request(app.getHttpServer())
+        .get('/api/wallet/me')
+        .set('Authorization', `Bearer ${b.accessToken}`)
+        .expect(200);
+      expect(bWallet.body.balance).toBe('-100.0000');
+
+      const aWallet = await request(app.getHttpServer())
+        .get('/api/wallet/me')
+        .set('Authorization', `Bearer ${a.accessToken}`)
+        .expect(200);
+      expect(aWallet.body.balance).toBe('100.0000');
+
+      await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${b.accessToken}`)
+        .send({ amount: '30.00' })
+        .expect(201);
+
+      const bWalletAfterDeposit = await request(app.getHttpServer())
+        .get('/api/wallet/me')
+        .set('Authorization', `Bearer ${b.accessToken}`)
+        .expect(200);
+      expect(bWalletAfterDeposit.body.balance).toBe('-70.0000');
+    });
+
+    it('rejects reversing the same transaction twice', async () => {
+      const admin = await createAuthenticatedUser(app, { roles: ['admin'] });
+      const user = await createAuthenticatedUser(app);
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .send({ amount: '10.00' })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${deposit.body.id}/reverse`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${deposit.body.id}/reverse`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(409);
+    });
+  });
 });

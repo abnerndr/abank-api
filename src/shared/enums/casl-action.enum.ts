@@ -10,5 +10,6 @@ export enum Resource {
   USER = 'User',
   ROLE = 'Role',
   PERMISSION = 'Permission',
+  TRANSACTION = 'Transaction',
   ALL = 'all',
 }

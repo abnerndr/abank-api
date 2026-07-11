@@ -1,9 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import Decimal from 'decimal.js';
-import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import { DataSource, In, QueryFailedError, Repository } from 'typeorm';
 import { v7 as uuid } from 'uuid';
-import { LedgerDirection, TransactionType } from '../../shared/enums/wallet.enum';
+import { LedgerDirection, TransactionStatus, TransactionType } from '../../shared/enums/wallet.enum';
 import { LedgerEntry } from '../../shared/entities/ledger-entry.entity';
 import { Transaction } from '../../shared/entities/transaction.entity';
 import { Wallet } from '../../shared/entities/wallet.entity';
@@ -13,8 +13,14 @@ import { TransactionResponseDTO } from './dto/transaction-response.dto';
 import { TransferDTO } from './dto/transfer.dto';
 import { WalletResponseDTO } from './dto/wallet-response.dto';
 import { RecipientNotFoundException } from './exceptions/recipient-not-found.exception';
+import { TransactionAlreadyReversedException } from './exceptions/transaction-already-reversed.exception';
 import { WalletNotFoundException } from './exceptions/wallet-not-found.exception';
-import { assertNotSelfTransfer, assertSufficientBalance } from './wallet-rules';
+import {
+  assertNotSelfTransfer,
+  assertReversible,
+  assertSufficientBalance,
+  computeReversalWalletIds,
+} from './wallet-rules';
 
 @Injectable()
 export class WalletService {
@@ -199,6 +205,112 @@ export class WalletService {
     }
   }
 
+  async reverse(adminUserId: string, transactionId: string): Promise<TransactionResponseDTO> {
+    const original = await this.transactionRepository.findOne({ where: { id: transactionId } });
+    if (!original) {
+      throw new NotFoundException('Transação não encontrada');
+    }
+    assertReversible(original);
+
+    const walletIds = [original.fromWalletId, original.toWalletId].filter(
+      (id): id is string => id !== null,
+    );
+
+    // reverse() can touch the same two wallets a concurrent transfer() is touching, so it must
+    // lock them in the same order transfer() does — sorted by the owning user's id, not by the
+    // wallet's own id — or the two methods could deadlock against each other. We only have wallet
+    // ids here (from the original transaction), so we look up each wallet's userId first,
+    // unlocked, purely to compute a consistent lock order before entering the transaction.
+    const walletsForOrdering = await this.walletRepository.find({ where: { id: In(walletIds) } });
+    const userIdByWalletId = new Map(walletsForOrdering.map((wallet) => [wallet.id, wallet.userId]));
+    const sortedWalletIds = [...walletIds].sort((a, b) =>
+      (userIdByWalletId.get(a) ?? '').localeCompare(userIdByWalletId.get(b) ?? ''),
+    );
+
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        const transactionRepository = manager.getRepository(Transaction);
+        const walletRepository = manager.getRepository(Wallet);
+        const ledgerRepository = manager.getRepository(LedgerEntry);
+
+        const lockedOriginal = await transactionRepository.findOne({ where: { id: transactionId } });
+        if (!lockedOriginal) {
+          throw new NotFoundException('Transação não encontrada');
+        }
+        assertReversible(lockedOriginal);
+
+        const wallets = new Map<string, Wallet>();
+        for (const id of sortedWalletIds) {
+          const wallet = await walletRepository.findOne({
+            where: { id },
+            lock: { mode: 'pessimistic_write' },
+          });
+          if (!wallet) {
+            throw new WalletNotFoundException();
+          }
+          wallets.set(id, wallet);
+        }
+
+        const { fromWalletId, toWalletId } = computeReversalWalletIds(lockedOriginal);
+
+        // fromWalletId here is whoever received in the original transaction — always set for a
+        // completed deposit or transfer — and gets debited back. No balance-sufficiency check:
+        // reversing on top of money the recipient already spent elsewhere is exactly the
+        // "negative balance for some reason" case the spec calls out, and it's deliberate.
+        const debitedWallet = wallets.get(fromWalletId as string)!;
+        debitedWallet.balance = debitedWallet.balance.minus(lockedOriginal.amount);
+        const ledgerEntries = [
+          ledgerRepository.create({
+            walletId: debitedWallet.id,
+            direction: LedgerDirection.DEBIT,
+            amount: lockedOriginal.amount,
+            balanceAfter: debitedWallet.balance,
+          }),
+        ];
+
+        if (toWalletId) {
+          const creditedWallet = wallets.get(toWalletId)!;
+          creditedWallet.balance = creditedWallet.balance.plus(lockedOriginal.amount);
+          ledgerEntries.push(
+            ledgerRepository.create({
+              walletId: creditedWallet.id,
+              direction: LedgerDirection.CREDIT,
+              amount: lockedOriginal.amount,
+              balanceAfter: creditedWallet.balance,
+            }),
+          );
+        }
+
+        await walletRepository.save([...wallets.values()]);
+
+        const reversalTransaction = transactionRepository.create({
+          type: TransactionType.REVERSAL,
+          amount: lockedOriginal.amount,
+          fromWalletId,
+          toWalletId,
+          reversalOfId: lockedOriginal.id,
+          requestedByUserId: adminUserId,
+        });
+        await transactionRepository.save(reversalTransaction);
+
+        for (const entry of ledgerEntries) {
+          entry.transactionId = reversalTransaction.id;
+        }
+        await ledgerRepository.save(ledgerEntries);
+
+        lockedOriginal.status = TransactionStatus.REVERSED;
+        await transactionRepository.save(lockedOriginal);
+
+        return this.toTransactionResponse(reversalTransaction);
+      });
+    } catch (error) {
+      if (this.isReversalConflict(error)) {
+        throw new TransactionAlreadyReversedException();
+      }
+      throw error;
+    }
+  }
+
   private async findIdempotentTransaction(
     requestedByUserId: string,
     idempotencyKey?: string,
@@ -221,6 +333,18 @@ export class WalletService {
     // narrowly scoped to the idempotency constraint rather than any other unique violation.
     const driverError = error as QueryFailedError & { code?: string; detail?: string };
     return driverError.code === '23505' && !!driverError.detail?.includes('idempotency_key');
+  }
+
+  private isReversalConflict(error: unknown): boolean {
+    if (!(error instanceof QueryFailedError)) {
+      return false;
+    }
+    // Task 2's partial unique index on Transaction.reversalOfId (`WHERE reversal_of_id IS NOT
+    // NULL`) is the DB-level backstop against double-reversal, in case two concurrent admin
+    // reversal requests for the same transaction both pass the in-transaction status check
+    // before either commits.
+    const driverError = error as QueryFailedError & { code?: string; detail?: string };
+    return driverError.code === '23505' && !!driverError.detail?.includes('reversal_of_id');
   }
 
   private toWalletResponse(wallet: Wallet): WalletResponseDTO {
