@@ -1,15 +1,27 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import Decimal from 'decimal.js';
+import { DataSource, Repository } from 'typeorm';
 import { v7 as uuid } from 'uuid';
+import { LedgerDirection, TransactionType } from '../../shared/enums/wallet.enum';
+import { LedgerEntry } from '../../shared/entities/ledger-entry.entity';
+import { Transaction } from '../../shared/entities/transaction.entity';
 import { Wallet } from '../../shared/entities/wallet.entity';
+import { DepositDTO } from './dto/deposit.dto';
+import { TransactionResponseDTO } from './dto/transaction-response.dto';
 import { WalletResponseDTO } from './dto/wallet-response.dto';
+import { WalletNotFoundException } from './exceptions/wallet-not-found.exception';
 
 @Injectable()
 export class WalletService {
   constructor(
     @InjectRepository(Wallet)
     private walletRepository: Repository<Wallet>,
+    @InjectRepository(Transaction)
+    private transactionRepository: Repository<Transaction>,
+    @InjectRepository(LedgerEntry)
+    private ledgerEntryRepository: Repository<LedgerEntry>,
+    private dataSource: DataSource,
   ) {}
 
   /**
@@ -44,6 +56,60 @@ export class WalletService {
     return this.toWalletResponse(wallet);
   }
 
+  async deposit(userId: string, dto: DepositDTO): Promise<TransactionResponseDTO> {
+    const existing = await this.findIdempotentTransaction(userId, dto.idempotencyKey);
+    if (existing) {
+      return this.toTransactionResponse(existing);
+    }
+
+    await this.getOrCreateWallet(userId);
+    const amount = new Decimal(dto.amount);
+
+    return this.dataSource.transaction(async (manager) => {
+      const walletRepository = manager.getRepository(Wallet);
+      const wallet = await walletRepository.findOne({
+        where: { userId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!wallet) {
+        throw new WalletNotFoundException();
+      }
+
+      wallet.balance = wallet.balance.plus(amount);
+      await walletRepository.save(wallet);
+
+      const transaction = manager.getRepository(Transaction).create({
+        type: TransactionType.DEPOSIT,
+        amount,
+        toWalletId: wallet.id,
+        requestedByUserId: userId,
+        idempotencyKey: dto.idempotencyKey ?? null,
+      });
+      await manager.getRepository(Transaction).save(transaction);
+
+      const ledgerEntry = manager.getRepository(LedgerEntry).create({
+        transactionId: transaction.id,
+        walletId: wallet.id,
+        direction: LedgerDirection.CREDIT,
+        amount,
+        balanceAfter: wallet.balance,
+      });
+      await manager.getRepository(LedgerEntry).save(ledgerEntry);
+
+      return this.toTransactionResponse(transaction);
+    });
+  }
+
+  private async findIdempotentTransaction(
+    requestedByUserId: string,
+    idempotencyKey?: string,
+  ): Promise<Transaction | null> {
+    if (!idempotencyKey) {
+      return null;
+    }
+    return this.transactionRepository.findOne({ where: { requestedByUserId, idempotencyKey } });
+  }
+
   private toWalletResponse(wallet: Wallet): WalletResponseDTO {
     return {
       id: wallet.id,
@@ -51,6 +117,21 @@ export class WalletService {
       currency: wallet.currency,
       createdAt: wallet.createdAt,
       updatedAt: wallet.updatedAt,
+    };
+  }
+
+  private toTransactionResponse(transaction: Transaction): TransactionResponseDTO {
+    return {
+      id: transaction.id,
+      type: transaction.type,
+      status: transaction.status,
+      amount: transaction.amount.toFixed(4),
+      fromWalletId: transaction.fromWalletId,
+      toWalletId: transaction.toWalletId,
+      reversalOfId: transaction.reversalOfId,
+      requestedByUserId: transaction.requestedByUserId,
+      idempotencyKey: transaction.idempotencyKey,
+      createdAt: transaction.createdAt,
     };
   }
 }
