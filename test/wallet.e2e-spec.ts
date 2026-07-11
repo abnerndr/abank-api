@@ -260,6 +260,47 @@ describe('Wallet (e2e)', () => {
       expect(senderWallet.body.balance).toBe('20.0000');
     });
 
+    it('does not deadlock when two transfers run concurrently in opposite directions between the same pair of wallets', async () => {
+      const userA = await createAuthenticatedUser(app);
+      const userB = await createAuthenticatedUser(app);
+      await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${userA.accessToken}`)
+        .send({ amount: '100.00' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${userB.accessToken}`)
+        .send({ amount: '100.00' })
+        .expect(201);
+
+      const [aToB, bToA] = await Promise.all([
+        request(app.getHttpServer())
+          .post('/api/wallet/transfer')
+          .set('Authorization', `Bearer ${userA.accessToken}`)
+          .send({ toEmail: userB.email, amount: '30.00' }),
+        request(app.getHttpServer())
+          .post('/api/wallet/transfer')
+          .set('Authorization', `Bearer ${userB.accessToken}`)
+          .send({ toEmail: userA.email, amount: '20.00' }),
+      ]);
+
+      expect(aToB.status).toBe(201);
+      expect(bToA.status).toBe(201);
+
+      const walletA = await request(app.getHttpServer())
+        .get('/api/wallet/me')
+        .set('Authorization', `Bearer ${userA.accessToken}`)
+        .expect(200);
+      expect(walletA.body.balance).toBe('90.0000');
+
+      const walletB = await request(app.getHttpServer())
+        .get('/api/wallet/me')
+        .set('Authorization', `Bearer ${userB.accessToken}`)
+        .expect(200);
+      expect(walletB.body.balance).toBe('110.0000');
+    });
+
     it('replays correctly when two transfers with the same idempotency key race each other', async () => {
       const sender = await createAuthenticatedUser(app);
       const recipient = await createAuthenticatedUser(app);
