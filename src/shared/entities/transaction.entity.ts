@@ -1,14 +1,16 @@
 import Decimal from 'decimal.js';
-import { BaseEntity, Column, CreateDateColumn, Entity, Index, PrimaryColumn } from 'typeorm';
+import { BaseEntity, Check, Column, CreateDateColumn, Entity, Index, PrimaryColumn } from 'typeorm';
 import { v7 as uuid } from 'uuid';
 import { TransactionStatus, TransactionType } from '../enums/wallet.enum';
 import { decimalTransformer } from '../utils/decimal.transformer';
 
 @Entity('transactions')
+@Check(`"amount" > 0`)
 @Index(['requestedByUserId', 'idempotencyKey'], {
   unique: true,
   where: '"idempotency_key" IS NOT NULL',
 })
+@Index(['reversalOfId'], { unique: true, where: '"reversal_of_id" IS NOT NULL' })
 export class Transaction extends BaseEntity {
   @PrimaryColumn('uuid')
   id = uuid();

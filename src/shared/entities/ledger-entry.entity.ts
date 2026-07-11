@@ -1,10 +1,11 @@
 import Decimal from 'decimal.js';
-import { BaseEntity, Column, CreateDateColumn, Entity, Index, PrimaryColumn } from 'typeorm';
+import { BaseEntity, Check, Column, CreateDateColumn, Entity, Index, PrimaryColumn } from 'typeorm';
 import { v7 as uuid } from 'uuid';
 import { LedgerDirection } from '../enums/wallet.enum';
 import { decimalTransformer } from '../utils/decimal.transformer';
 
 @Entity('ledger_entries')
+@Check(`"amount" > 0`)
 export class LedgerEntry extends BaseEntity {
   @PrimaryColumn('uuid')
   id = uuid();
