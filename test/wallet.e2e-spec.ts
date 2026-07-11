@@ -475,4 +475,97 @@ describe('Wallet (e2e)', () => {
       expect(wallet.body.balance).toBe('0.0000');
     });
   });
+
+  describe('GET /api/wallet/transactions', () => {
+    it('lists only transactions the caller participated in, newest first', async () => {
+      const a = await createAuthenticatedUser(app);
+      const b = await createAuthenticatedUser(app);
+
+      await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${a.accessToken}`)
+        .send({ amount: '50.00' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post('/api/wallet/transfer')
+        .set('Authorization', `Bearer ${a.accessToken}`)
+        .send({ toEmail: b.email, amount: '20.00' })
+        .expect(201);
+
+      const response = await request(app.getHttpServer())
+        .get('/api/wallet/transactions')
+        .set('Authorization', `Bearer ${a.accessToken}`)
+        .expect(200);
+
+      expect(response.body.total).toBe(2);
+      expect(response.body.transactions[0].type).toBe('TRANSFER');
+      expect(response.body.transactions[1].type).toBe('DEPOSIT');
+
+      const recipientResponse = await request(app.getHttpServer())
+        .get('/api/wallet/transactions')
+        .set('Authorization', `Bearer ${b.accessToken}`)
+        .expect(200);
+      expect(recipientResponse.body.total).toBe(1);
+    });
+  });
+
+  describe('GET /api/wallet/transactions/:id', () => {
+    it('lets a participant see the transaction', async () => {
+      const a = await createAuthenticatedUser(app);
+      const b = await createAuthenticatedUser(app);
+      await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${a.accessToken}`)
+        .send({ amount: '50.00' })
+        .expect(201);
+      const transfer = await request(app.getHttpServer())
+        .post('/api/wallet/transfer')
+        .set('Authorization', `Bearer ${a.accessToken}`)
+        .send({ toEmail: b.email, amount: '20.00' })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .get(`/api/wallet/transactions/${transfer.body.id}`)
+        .set('Authorization', `Bearer ${b.accessToken}`)
+        .expect(200);
+    });
+
+    it('forbids a non-participant, non-admin user', async () => {
+      const a = await createAuthenticatedUser(app);
+      const outsider = await createAuthenticatedUser(app);
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${a.accessToken}`)
+        .send({ amount: '50.00' })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .get(`/api/wallet/transactions/${deposit.body.id}`)
+        .set('Authorization', `Bearer ${outsider.accessToken}`)
+        .expect(403);
+    });
+
+    it('lets an admin see any transaction', async () => {
+      const admin = await createAuthenticatedUser(app, { roles: ['admin'] });
+      const a = await createAuthenticatedUser(app);
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${a.accessToken}`)
+        .send({ amount: '50.00' })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .get(`/api/wallet/transactions/${deposit.body.id}`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+    });
+
+    it('returns 404 for an unknown transaction id', async () => {
+      const a = await createAuthenticatedUser(app);
+      await request(app.getHttpServer())
+        .get('/api/wallet/transactions/00000000-0000-7000-8000-000000000000')
+        .set('Authorization', `Bearer ${a.accessToken}`)
+        .expect(404);
+    });
+  });
 });

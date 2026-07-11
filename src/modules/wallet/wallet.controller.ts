@@ -7,14 +7,17 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { isAdmin } from '../../shared/utils/auth.utils';
 import { ManageTransactions } from '../auth/decorators/check-abilities.decorator';
 import { CurrentUser, CurrentUserData } from '../auth/decorators/current-user.decorator';
 import { AbilitiesGuard } from '../auth/guards/abilities.guard';
 import { DepositDTO } from './dto/deposit.dto';
-import { TransactionResponseDTO } from './dto/transaction-response.dto';
+import { TransactionQueryDTO } from './dto/transaction-query.dto';
+import { TransactionListResponseDTO, TransactionResponseDTO } from './dto/transaction-response.dto';
 import { TransferDTO } from './dto/transfer.dto';
 import { WalletResponseDTO } from './dto/wallet-response.dto';
 import { WalletService } from './wallet.service';
@@ -34,6 +37,28 @@ export class WalletController {
   })
   async getMyWallet(@CurrentUser() user: CurrentUserData): Promise<WalletResponseDTO> {
     return this.walletService.getWalletBalance(user.id);
+  }
+
+  @Get('transactions')
+  @ApiOperation({ summary: 'Listar transações da carteira do usuário logado' })
+  @ApiResponse({ status: 200, description: 'Lista de transações', type: TransactionListResponseDTO })
+  async listTransactions(
+    @CurrentUser() user: CurrentUserData,
+    @Query() query: TransactionQueryDTO,
+  ): Promise<TransactionListResponseDTO> {
+    return this.walletService.listTransactions(user.id, query.page, query.limit);
+  }
+
+  @Get('transactions/:id')
+  @ApiOperation({ summary: 'Detalhe de uma transação' })
+  @ApiResponse({ status: 200, description: 'Transação encontrada', type: TransactionResponseDTO })
+  @ApiResponse({ status: 403, description: 'Sem permissão para ver esta transação' })
+  @ApiResponse({ status: 404, description: 'Transação não encontrada' })
+  async getTransaction(
+    @CurrentUser() user: CurrentUserData,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<TransactionResponseDTO> {
+    return this.walletService.getTransaction(user.id, isAdmin(user), id);
   }
 
   @Post('deposit')

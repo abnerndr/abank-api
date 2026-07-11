@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import Decimal from 'decimal.js';
 import { DataSource, In, QueryFailedError, Repository } from 'typeorm';
@@ -9,7 +9,7 @@ import { Transaction } from '../../shared/entities/transaction.entity';
 import { Wallet } from '../../shared/entities/wallet.entity';
 import { UsersService } from '../users/users.service';
 import { DepositDTO } from './dto/deposit.dto';
-import { TransactionResponseDTO } from './dto/transaction-response.dto';
+import { TransactionListResponseDTO, TransactionResponseDTO } from './dto/transaction-response.dto';
 import { TransferDTO } from './dto/transfer.dto';
 import { WalletResponseDTO } from './dto/wallet-response.dto';
 import { RecipientNotFoundException } from './exceptions/recipient-not-found.exception';
@@ -65,6 +65,58 @@ export class WalletService {
   async getWalletBalance(userId: string): Promise<WalletResponseDTO> {
     const wallet = await this.getOrCreateWallet(userId);
     return this.toWalletResponse(wallet);
+  }
+
+  async listTransactions(
+    userId: string,
+    page: number,
+    limit: number,
+  ): Promise<TransactionListResponseDTO> {
+    const wallet = await this.walletRepository.findOne({ where: { userId } });
+
+    const [transactions, total] = await this.transactionRepository.findAndCount({
+      where: wallet
+        ? [
+            { fromWalletId: wallet.id },
+            { toWalletId: wallet.id },
+            { requestedByUserId: userId },
+          ]
+        : { requestedByUserId: userId },
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return {
+      transactions: transactions.map((transaction) => this.toTransactionResponse(transaction)),
+      total,
+      page,
+      limit,
+    };
+  }
+
+  async getTransaction(
+    userId: string,
+    isAdmin: boolean,
+    transactionId: string,
+  ): Promise<TransactionResponseDTO> {
+    const transaction = await this.transactionRepository.findOne({ where: { id: transactionId } });
+    if (!transaction) {
+      throw new NotFoundException('Transação não encontrada');
+    }
+
+    if (!isAdmin) {
+      const wallet = await this.walletRepository.findOne({ where: { userId } });
+      const isParticipant =
+        transaction.requestedByUserId === userId ||
+        (!!wallet && (transaction.fromWalletId === wallet.id || transaction.toWalletId === wallet.id));
+
+      if (!isParticipant) {
+        throw new ForbiddenException('Sem permissão para ver esta transação');
+      }
+    }
+
+    return this.toTransactionResponse(transaction);
   }
 
   async deposit(userId: string, dto: DepositDTO): Promise<TransactionResponseDTO> {
