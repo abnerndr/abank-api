@@ -9,7 +9,7 @@ import Decimal from 'decimal.js';
 @ValidatorConstraint({ name: 'isPositiveDecimalString', async: false })
 export class IsPositiveDecimalStringConstraint implements ValidatorConstraintInterface {
   validate(value: unknown): boolean {
-    if (typeof value !== 'string' || !/^\d+(\.\d{1,4})?$/.test(value)) {
+    if (typeof value !== 'string' || !/^\d{1,15}(\.\d{1,4})?$/.test(value)) {
       return false;
     }
     try {
