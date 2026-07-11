@@ -119,6 +119,32 @@ describe('Wallet (e2e)', () => {
       expect(wallet.body.balance).toBe('10.0000');
     });
 
+    it('replays correctly when two deposits with the same idempotency key race each other', async () => {
+      const { accessToken } = await createAuthenticatedUser(app);
+      const idempotencyKey = 'deposit-race-key';
+
+      const [first, second] = await Promise.all([
+        request(app.getHttpServer())
+          .post('/api/wallet/deposit')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({ amount: '10.00', idempotencyKey }),
+        request(app.getHttpServer())
+          .post('/api/wallet/deposit')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({ amount: '10.00', idempotencyKey }),
+      ]);
+
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(201);
+      expect(second.body.id).toBe(first.body.id);
+
+      const wallet = await request(app.getHttpServer())
+        .get('/api/wallet/me')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      expect(wallet.body.balance).toBe('10.0000');
+    });
+
     it('rejects a non-positive amount', async () => {
       const { accessToken } = await createAuthenticatedUser(app);
 

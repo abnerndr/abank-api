@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import Decimal from 'decimal.js';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, QueryFailedError, Repository } from 'typeorm';
 import { v7 as uuid } from 'uuid';
 import { LedgerDirection, TransactionType } from '../../shared/enums/wallet.enum';
 import { LedgerEntry } from '../../shared/entities/ledger-entry.entity';
@@ -65,39 +65,49 @@ export class WalletService {
     await this.getOrCreateWallet(userId);
     const amount = new Decimal(dto.amount);
 
-    return this.dataSource.transaction(async (manager) => {
-      const walletRepository = manager.getRepository(Wallet);
-      const wallet = await walletRepository.findOne({
-        where: { userId },
-        lock: { mode: 'pessimistic_write' },
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        const walletRepository = manager.getRepository(Wallet);
+        const wallet = await walletRepository.findOne({
+          where: { userId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!wallet) {
+          throw new WalletNotFoundException();
+        }
+
+        wallet.balance = wallet.balance.plus(amount);
+        await walletRepository.save(wallet);
+
+        const transaction = manager.getRepository(Transaction).create({
+          type: TransactionType.DEPOSIT,
+          amount,
+          toWalletId: wallet.id,
+          requestedByUserId: userId,
+          idempotencyKey: dto.idempotencyKey ?? null,
+        });
+        await manager.getRepository(Transaction).save(transaction);
+
+        const ledgerEntry = manager.getRepository(LedgerEntry).create({
+          transactionId: transaction.id,
+          walletId: wallet.id,
+          direction: LedgerDirection.CREDIT,
+          amount,
+          balanceAfter: wallet.balance,
+        });
+        await manager.getRepository(LedgerEntry).save(ledgerEntry);
+
+        return this.toTransactionResponse(transaction);
       });
-      if (!wallet) {
-        throw new WalletNotFoundException();
+    } catch (error) {
+      if (dto.idempotencyKey && this.isIdempotencyKeyConflict(error)) {
+        const replay = await this.findIdempotentTransaction(userId, dto.idempotencyKey);
+        if (replay) {
+          return this.toTransactionResponse(replay);
+        }
       }
-
-      wallet.balance = wallet.balance.plus(amount);
-      await walletRepository.save(wallet);
-
-      const transaction = manager.getRepository(Transaction).create({
-        type: TransactionType.DEPOSIT,
-        amount,
-        toWalletId: wallet.id,
-        requestedByUserId: userId,
-        idempotencyKey: dto.idempotencyKey ?? null,
-      });
-      await manager.getRepository(Transaction).save(transaction);
-
-      const ledgerEntry = manager.getRepository(LedgerEntry).create({
-        transactionId: transaction.id,
-        walletId: wallet.id,
-        direction: LedgerDirection.CREDIT,
-        amount,
-        balanceAfter: wallet.balance,
-      });
-      await manager.getRepository(LedgerEntry).save(ledgerEntry);
-
-      return this.toTransactionResponse(transaction);
-    });
+      throw error;
+    }
   }
 
   private async findIdempotentTransaction(
@@ -108,6 +118,20 @@ export class WalletService {
       return null;
     }
     return this.transactionRepository.findOne({ where: { requestedByUserId, idempotencyKey } });
+  }
+
+  private isIdempotencyKeyConflict(error: unknown): boolean {
+    if (!(error instanceof QueryFailedError)) {
+      return false;
+    }
+    // TypeORM's default naming strategy hashes the partial unique index name (e.g.
+    // "IDX_06f35ca5180e2f830b5f48ee43"), so it never appears in `error.message`. The Postgres
+    // driver does copy `code` and `detail` onto the QueryFailedError instance though, and
+    // `detail` spells out the offending columns (e.g. "Key (requested_by_user_id,
+    // idempotency_key)=(...) already exists."), which is what we key off of to keep this
+    // narrowly scoped to the idempotency constraint rather than any other unique violation.
+    const driverError = error as QueryFailedError & { code?: string; detail?: string };
+    return driverError.code === '23505' && !!driverError.detail?.includes('idempotency_key');
   }
 
   private toWalletResponse(wallet: Wallet): WalletResponseDTO {
