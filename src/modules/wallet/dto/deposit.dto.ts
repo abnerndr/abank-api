@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { IsPositiveDecimalString } from '../../../shared/validators/is-positive-decimal-string.validator';
 
 export class DepositDTO {
@@ -13,6 +13,7 @@ export class DepositDTO {
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
   })
   @IsOptional()
+  @IsNotEmpty()
   @IsString()
   @MaxLength(255)
   idempotencyKey?: string;
