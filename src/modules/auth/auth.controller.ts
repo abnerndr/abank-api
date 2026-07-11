@@ -7,7 +7,6 @@ import { AuthService } from './auth.service';
 import { CurrentUser, CurrentUserData } from './decorators/current-user.decorator';
 import { Public } from './decorators/public.decorator';
 import { AuthResponseDTO } from './dto/auth.dto';
-import { GoogleAuthDTO } from './dto/google-auth.dto';
 import { LoginDTO } from './dto/login.dto';
 import { MagicLinkDTO, MagicLinkLoginDTO } from './dto/magic-link.dto';
 import { MessageResponseDTO } from './dto/message.dto';
@@ -52,25 +51,6 @@ export class AuthController {
     @Res({ passthrough: true }) response: FastifyReply,
   ): Promise<TokenPair> {
     const authResponse = await this.authService.login(loginDto);
-    this.authService.setCookieOnly(response, authResponse.access_token, authResponse.refresh_token);
-    return authResponse;
-  }
-
-  @Public()
-  @Post('google')
-  @ApiBody({ type: GoogleAuthDTO })
-  @ApiOperation({ summary: 'Login com Google' })
-  @ApiResponse({
-    status: 200,
-    description: 'Login Google realizado com sucesso',
-    type: AuthResponseDTO,
-  })
-  @ApiResponse({ status: 401, description: 'Token Google inválido' })
-  async googleLogin(
-    @Body() googleLoginDto: GoogleAuthDTO,
-    @Res({ passthrough: true }) response: FastifyReply,
-  ): Promise<TokenPair> {
-    const authResponse = await this.authService.googleLogin(googleLoginDto);
     this.authService.setCookieOnly(response, authResponse.access_token, authResponse.refresh_token);
     return authResponse;
   }

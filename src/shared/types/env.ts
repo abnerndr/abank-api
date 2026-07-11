@@ -4,10 +4,10 @@ export type AppConfigProps = {
   APP_NAME: string;
   APP_DESCRIPTION: string;
   NODE_ENV: string;
+  FRONTEND_URL: string;
   CORS_ORIGIN: string;
   DATABASE_URL: string;
   MAIL: MailConfig;
-  GOOGLE_OAUTH: GoogleOAuthConfig;
   JWT: JWTConfig;
   ADMIN: AdminConfig;
 };
@@ -16,12 +16,6 @@ type MailConfig = {
   API_KEY: string;
   FROM: string;
   NAME: string;
-};
-
-type GoogleOAuthConfig = {
-  CLIENT_ID: string;
-  CLIENT_SECRET: string;
-  CALLBACK_URL: string;
 };
 
 type JWTConfig = {

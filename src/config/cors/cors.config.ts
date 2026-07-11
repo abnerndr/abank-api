@@ -1,20 +1,26 @@
-import { CONFIG } from 'src/shared/constants/env';
+import { CONFIG } from '../../shared/constants/env';
+import { allowedOrigins } from '../../shared/utils/allowed-origins';
 
 export class CorsConfig {
   public static cors() {
+    const raw = (CONFIG.CORS_ORIGIN ?? '*').trim();
+    const origins = raw
+      .split(',')
+      .map((origin: string) => origin.trim())
+      .filter(Boolean);
+
+    const list = allowedOrigins(origins);
+    const isDev = CONFIG.NODE_ENV.toLowerCase().includes('dev');
+    const isProduction = CONFIG.NODE_ENV.toLowerCase() === 'production';
+
+    const allowAllInDev =
+      !isProduction && (raw === '*' || origins.includes('*') || !list.length || isDev);
+
     return {
-      origin: [CONFIG.CORS_ORIGIN],
-      allowedHeaders: [
-        'Access-Control-Allow-Origin',
-        'Origin',
-        'X-Requested-With',
-        'Accept',
-        'Content-Type',
-        'Authorization',
-      ],
+      origin: allowAllInDev ? true : list,
       exposedHeaders: 'Authorization',
       credentials: true,
-      methods: ['GET', 'PUT', 'OPTIONS', 'POST', 'DELETE'],
+      methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'OPTIONS', 'POST', 'DELETE'],
     };
   }
 }

@@ -14,7 +14,6 @@ import { Role } from 'src/shared/entities/role.entity';
 import { TokenPair } from 'src/shared/interfaces/jwt-token';
 import { User } from '../../shared/entities/user.entity';
 import { UsersService } from '../users/users.service';
-import { GoogleAuthDTO } from './dto/google-auth.dto';
 import { LoginDTO } from './dto/login.dto';
 import { MagicLinkDTO } from './dto/magic-link.dto';
 import { MessageResponseDTO } from './dto/message.dto';
@@ -23,7 +22,6 @@ import { RefreshTokenDTO } from './dto/refresh-token.dto';
 import { RegisterDTO } from './dto/register.dto';
 import { ResetPasswordDTO } from './dto/reset-password.dto';
 import { VerifyEmailDTO } from './dto/verify-email.dto';
-import { GoogleAuthService } from './services/google-auth.service';
 import { TokenService } from './services/token.service';
 
 @Injectable()
@@ -32,7 +30,6 @@ export class AuthService {
     private usersService: UsersService,
     private tokenService: TokenService,
     private mailService: MailService,
-    private googleAuthService: GoogleAuthService,
   ) {}
 
   async register(registerDto: RegisterDTO): Promise<MessageResponseDTO> {
@@ -73,34 +70,6 @@ export class AuthService {
 
     if (!user.isVerified) {
       throw new UnauthorizedException('Please verify your email first');
-    }
-
-    return this.generateTokens(user);
-  }
-
-  async googleLogin(googleLoginDto: GoogleAuthDTO): Promise<TokenPair> {
-    const googleUser = await this.googleAuthService.verifyIdToken(googleLoginDto.googleToken);
-
-    if (!googleUser.email_verified) {
-      throw new BadRequestException('Email Google não verificado');
-    }
-
-    let user = await this.usersService.findByEmail(googleUser.email);
-
-    if (!user) {
-      user = await this.usersService.create({
-        email: googleUser.email,
-        name: googleUser.name,
-        avatar: googleUser.avatar,
-        googleId: googleUser.id,
-        isVerified: true,
-      });
-    } else if (!user.googleId) {
-      user = await this.usersService.update(user.id, {
-        googleId: googleUser.id,
-        name: googleUser.name,
-        avatar: googleUser.avatar,
-      });
     }
 
     return this.generateTokens(user);

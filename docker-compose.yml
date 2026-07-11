@@ -3,10 +3,10 @@ version: "3.8"
 services:
   db:
     image: postgres:14
-    container_name: nest-fastify-base-db
+    container_name: abank-db
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: 123456
       POSTGRES_DB: postgres
     ports:
       - "5432:5432"

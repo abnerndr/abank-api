@@ -11,9 +11,7 @@ import { CaslAbilityFactory } from './casl/casl-ability.factory';
 import { AbilitiesGuard } from './guards/abilities.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { MagicLinkGuard } from './guards/magic-link.guard';
-import { GoogleAuthService } from './services/google-auth.service';
 import { TokenService } from './services/token.service';
-import { GoogleStrategy } from './strategies/google.strategy';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { MagicLinkStrategy } from './strategies/magic-link.strategy';
 
@@ -33,10 +31,8 @@ import { MagicLinkStrategy } from './strategies/magic-link.strategy';
   providers: [
     AuthService,
     TokenService,
-    GoogleAuthService,
     CaslAbilityFactory,
     JwtStrategy,
-    GoogleStrategy,
     MagicLinkStrategy,
     MagicLinkGuard,
     AbilitiesGuard,
@@ -45,6 +41,6 @@ import { MagicLinkStrategy } from './strategies/magic-link.strategy';
       useClass: JwtAuthGuard,
     },
   ],
-  exports: [AuthService, TokenService, GoogleAuthService, CaslAbilityFactory, AbilitiesGuard],
+  exports: [AuthService, TokenService, CaslAbilityFactory, AbilitiesGuard],
 })
 export class AuthModule {}
