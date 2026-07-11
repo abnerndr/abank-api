@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nes
 import { CurrentUser, CurrentUserData } from '../auth/decorators/current-user.decorator';
 import { DepositDTO } from './dto/deposit.dto';
 import { TransactionResponseDTO } from './dto/transaction-response.dto';
+import { TransferDTO } from './dto/transfer.dto';
 import { WalletResponseDTO } from './dto/wallet-response.dto';
 import { WalletService } from './wallet.service';
 
@@ -38,5 +39,23 @@ export class WalletController {
     @Body() dto: DepositDTO,
   ): Promise<TransactionResponseDTO> {
     return this.walletService.deposit(user.id, dto);
+  }
+
+  @Post('transfer')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Transferir para a carteira de outro usuário' })
+  @ApiBody({ type: TransferDTO })
+  @ApiResponse({
+    status: 201,
+    description: 'Transferência realizada com sucesso',
+    type: TransactionResponseDTO,
+  })
+  @ApiResponse({ status: 400, description: 'Saldo insuficiente, valor inválido ou auto-transferência' })
+  @ApiResponse({ status: 404, description: 'Destinatário não encontrado' })
+  async transfer(
+    @CurrentUser() user: CurrentUserData,
+    @Body() dto: TransferDTO,
+  ): Promise<TransactionResponseDTO> {
+    return this.walletService.transfer(user.id, dto);
   }
 }

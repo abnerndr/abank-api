@@ -7,10 +7,14 @@ import { LedgerDirection, TransactionType } from '../../shared/enums/wallet.enum
 import { LedgerEntry } from '../../shared/entities/ledger-entry.entity';
 import { Transaction } from '../../shared/entities/transaction.entity';
 import { Wallet } from '../../shared/entities/wallet.entity';
+import { UsersService } from '../users/users.service';
 import { DepositDTO } from './dto/deposit.dto';
 import { TransactionResponseDTO } from './dto/transaction-response.dto';
+import { TransferDTO } from './dto/transfer.dto';
 import { WalletResponseDTO } from './dto/wallet-response.dto';
+import { RecipientNotFoundException } from './exceptions/recipient-not-found.exception';
 import { WalletNotFoundException } from './exceptions/wallet-not-found.exception';
+import { assertNotSelfTransfer, assertSufficientBalance } from './wallet-rules';
 
 @Injectable()
 export class WalletService {
@@ -21,6 +25,7 @@ export class WalletService {
     private transactionRepository: Repository<Transaction>,
     @InjectRepository(LedgerEntry)
     private ledgerEntryRepository: Repository<LedgerEntry>,
+    private usersService: UsersService,
     private dataSource: DataSource,
   ) {}
 
@@ -96,6 +101,90 @@ export class WalletService {
           balanceAfter: wallet.balance,
         });
         await manager.getRepository(LedgerEntry).save(ledgerEntry);
+
+        return this.toTransactionResponse(transaction);
+      });
+    } catch (error) {
+      if (dto.idempotencyKey && this.isIdempotencyKeyConflict(error)) {
+        const replay = await this.findIdempotentTransaction(userId, dto.idempotencyKey);
+        if (replay) {
+          return this.toTransactionResponse(replay);
+        }
+      }
+      throw error;
+    }
+  }
+
+  async transfer(userId: string, dto: TransferDTO): Promise<TransactionResponseDTO> {
+    const existing = await this.findIdempotentTransaction(userId, dto.idempotencyKey);
+    if (existing) {
+      return this.toTransactionResponse(existing);
+    }
+
+    const recipient = await this.usersService.findByEmail(dto.toEmail);
+    if (!recipient) {
+      throw new RecipientNotFoundException();
+    }
+    assertNotSelfTransfer(userId, recipient.id);
+
+    await this.getOrCreateWallet(userId);
+    await this.getOrCreateWallet(recipient.id);
+    const amount = new Decimal(dto.amount);
+
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        const walletRepository = manager.getRepository(Wallet);
+        // Lock in a deterministic order (sorted user id) regardless of who is sender/receiver,
+        // so two transfers between the same pair of wallets in opposite directions can never
+        // deadlock waiting on each other's row lock.
+        const [firstUserId, secondUserId] = [userId, recipient.id].sort();
+        const firstWallet = await walletRepository.findOne({
+          where: { userId: firstUserId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        const secondWallet = await walletRepository.findOne({
+          where: { userId: secondUserId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!firstWallet || !secondWallet) {
+          throw new WalletNotFoundException();
+        }
+
+        const source = firstWallet.userId === userId ? firstWallet : secondWallet;
+        const destination = firstWallet.userId === userId ? secondWallet : firstWallet;
+
+        assertSufficientBalance(source.balance, amount);
+
+        source.balance = source.balance.minus(amount);
+        destination.balance = destination.balance.plus(amount);
+        await walletRepository.save([source, destination]);
+
+        const transaction = manager.getRepository(Transaction).create({
+          type: TransactionType.TRANSFER,
+          amount,
+          fromWalletId: source.id,
+          toWalletId: destination.id,
+          requestedByUserId: userId,
+          idempotencyKey: dto.idempotencyKey ?? null,
+        });
+        await manager.getRepository(Transaction).save(transaction);
+
+        await manager.getRepository(LedgerEntry).save([
+          manager.getRepository(LedgerEntry).create({
+            transactionId: transaction.id,
+            walletId: source.id,
+            direction: LedgerDirection.DEBIT,
+            amount,
+            balanceAfter: source.balance,
+          }),
+          manager.getRepository(LedgerEntry).create({
+            transactionId: transaction.id,
+            walletId: destination.id,
+            direction: LedgerDirection.CREDIT,
+            amount,
+            balanceAfter: destination.balance,
+          }),
+        ]);
 
         return this.toTransactionResponse(transaction);
       });
