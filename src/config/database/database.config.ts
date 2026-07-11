@@ -3,6 +3,16 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CONFIG } from 'src/shared/constants/env';
 import { entities } from '../../shared/entities';
 
+const IS_LOCAL_DATABASE = /localhost|127\.0\.0\.1/.test(CONFIG.DATABASE_URL);
+const SHOULD_SYNCHRONIZE = CONFIG.NODE_ENV.toLowerCase().includes('development');
+
+if (SHOULD_SYNCHRONIZE && !IS_LOCAL_DATABASE) {
+  throw new Error(
+    'Refusing to start with TypeORM synchronize enabled against a non-local DATABASE_URL. ' +
+      'synchronize must only ever run against a local development database.',
+  );
+}
+
 @Global()
 @Module({
   imports: [
@@ -12,7 +22,7 @@ import { entities } from '../../shared/entities';
         url: CONFIG.DATABASE_URL,
         entities: entities,
         logging: ['query', 'error'],
-        synchronize: CONFIG.NODE_ENV.toLowerCase().includes('development'),
+        synchronize: SHOULD_SYNCHRONIZE,
         ssl: CONFIG.NODE_ENV.toLowerCase().includes('production')
           ? { rejectUnauthorized: false }
           : false,
