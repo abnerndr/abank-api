@@ -446,5 +446,33 @@ describe('Wallet (e2e)', () => {
         .set('Authorization', `Bearer ${admin.accessToken}`)
         .expect(409);
     });
+
+    it('returns one success and one conflict when two reversal requests race on the same transaction', async () => {
+      const admin = await createAuthenticatedUser(app, { roles: ['admin'] });
+      const user = await createAuthenticatedUser(app);
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .send({ amount: '10.00' })
+        .expect(201);
+
+      const [first, second] = await Promise.all([
+        request(app.getHttpServer())
+          .post(`/api/wallet/transactions/${deposit.body.id}/reverse`)
+          .set('Authorization', `Bearer ${admin.accessToken}`),
+        request(app.getHttpServer())
+          .post(`/api/wallet/transactions/${deposit.body.id}/reverse`)
+          .set('Authorization', `Bearer ${admin.accessToken}`),
+      ]);
+
+      const statuses = [first.status, second.status].sort();
+      expect(statuses).toEqual([200, 409]);
+
+      const wallet = await request(app.getHttpServer())
+        .get('/api/wallet/me')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .expect(200);
+      expect(wallet.body.balance).toBe('0.0000');
+    });
   });
 });

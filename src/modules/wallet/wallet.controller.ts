@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ManageTransactions } from '../auth/decorators/check-abilities.decorator';
 import { CurrentUser, CurrentUserData } from '../auth/decorators/current-user.decorator';
@@ -76,7 +86,7 @@ export class WalletController {
   @ApiResponse({ status: 409, description: 'Transação já revertida' })
   async reverse(
     @CurrentUser() user: CurrentUserData,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<TransactionResponseDTO> {
     return this.walletService.reverse(user.id, id);
   }

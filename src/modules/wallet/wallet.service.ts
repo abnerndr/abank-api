@@ -223,9 +223,11 @@ export class WalletService {
     // unlocked, purely to compute a consistent lock order before entering the transaction.
     const walletsForOrdering = await this.walletRepository.find({ where: { id: In(walletIds) } });
     const userIdByWalletId = new Map(walletsForOrdering.map((wallet) => [wallet.id, wallet.userId]));
-    const sortedWalletIds = [...walletIds].sort((a, b) =>
-      (userIdByWalletId.get(a) ?? '').localeCompare(userIdByWalletId.get(b) ?? ''),
-    );
+    const sortedWalletIds = [...walletIds].sort((a, b) => {
+      const userIdA = userIdByWalletId.get(a) ?? '';
+      const userIdB = userIdByWalletId.get(b) ?? '';
+      return userIdA < userIdB ? -1 : userIdA > userIdB ? 1 : 0;
+    });
 
     try {
       return await this.dataSource.transaction(async (manager) => {
