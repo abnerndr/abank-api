@@ -6,6 +6,6 @@ export class ScalarConfig {
   public static setup(path: string, app: INestApplication, document: OpenAPIObject): void {
     const scalarApiReference = apiReference(document);
     const scalarApiReferencePath = `${path}/scalar`;
-    app.use(scalarApiReference, scalarApiReferencePath);
+    app.use(scalarApiReferencePath, scalarApiReference);
   }
 }
