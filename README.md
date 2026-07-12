@@ -57,6 +57,100 @@ $ pnpm run test:e2e
 $ pnpm run test:cov
 ```
 
+## Wallet
+
+Financial wallet domain: deposit, transfer between users, and admin-only reversal, built on top
+of the existing auth/users infrastructure. Full design rationale in
+`docs/superpowers/specs/2026-07-11-wallet-design.md`.
+
+### Architecture
+
+- **One wallet per user (`BRL`), created lazily** on first access rather than at registration, so
+  the module stays decoupled from `AuthService.register`. The insert uses `orIgnore()`, making two
+  concurrent first-accesses safe (one wins, the other is a no-op, both re-select the same row).
+- **Money is never a JS `number`.** It is a `Decimal` (`decimal.js`) in code, a `numeric(19,4)`
+  column in Postgres (via `decimalTransformer`), and a string on the wire (e.g. `"150.00"`).
+  Request amounts are validated by `IsPositiveDecimalString` (a positive decimal string with up to
+  4 fractional digits and up to 15 integer digits, matching the column scale/precision).
+- **Double-entry ledger.** Every deposit, transfer and reversal writes one `Transaction` (the
+  business record) plus one immutable `LedgerEntry` per affected wallet (the audit trail).
+  `Wallet.balance` is only ever mutated inside these flows.
+- **Concurrency.** Each operation runs inside a single `dataSource.transaction()` with
+  `pessimistic_write` (`SELECT … FOR UPDATE`) row locks on every wallet it touches, so concurrent
+  transfers on the same balance can't overdraw it. When two wallets are locked (transfer, reversal)
+  they are always locked in a deterministic order — sorted by the **owning user's id** — so two
+  operations touching the same pair in opposite directions can never deadlock against each other.
+- **Idempotency.** `deposit`/`transfer` accept an optional `idempotencyKey`, unique per requesting
+  user (partial unique index). Re-sending the same key replays the already-processed transaction
+  instead of reprocessing. Under a race, the losing insert is caught by inspecting the Postgres
+  error (`code === '23505'` + the offending column in `error.detail`, not `error.message`) and the
+  original transaction is returned.
+- **Reversal is admin-only** (`AbilitiesGuard` + CASL `manage all`, the same mechanism the roles
+  module uses) and **never fails for insufficient balance**: reversing a transfer whose recipient
+  already spent the funds is expected to push their wallet negative — a later deposit simply adds on
+  top of that negative balance. A partial unique index on `reversalOfId` is the DB-level backstop
+  against double-reversal: two concurrent reversals of the same transaction yield one `200` and one
+  `409`.
+- **`:id` routes use `ParseUUIDPipe`**, returning a clean `400` for a malformed id instead of a raw
+  500 from a Postgres cast error (this app has no global exception filter).
+- **Transaction visibility.** `GET /api/wallet/transactions/:id` is allowed for an admin or a
+  *participant* — the user who requested it, or the owner of the source/destination wallet. The
+  requester keeps read access **permanently**, even after losing a role: an admin who performed a
+  reversal can still view that reversal after being demoted (audit-trail semantics — the role gates
+  performing new admin actions, not seeing the ones already taken). See `wallet-rules.ts`.
+
+### Endpoints
+
+All routes sit behind the global JWT guard (`Authorization: Bearer <token>`).
+
+| Method | Path                                    | Description                                     |
+|--------|-----------------------------------------|-------------------------------------------------|
+| GET    | `/api/wallet/me`                        | Own wallet balance                              |
+| GET    | `/api/wallet/transactions`              | Own transaction history (paginated)             |
+| GET    | `/api/wallet/transactions/:id`          | Transaction detail (participant or admin)       |
+| POST   | `/api/wallet/deposit`                   | Deposit into own wallet                         |
+| POST   | `/api/wallet/transfer`                  | Transfer to another user's wallet, by email     |
+| POST   | `/api/wallet/transactions/:id/reverse`  | Reverse a completed deposit/transfer (admin)    |
+
+Interactive API docs are served at `/docs`.
+
+### Examples
+
+The server listens on `PORT` (default `3000`). Adjust the host/port below to your `.env`.
+
+```bash
+# Deposit (optional idempotencyKey replays instead of double-charging)
+curl -X POST http://localhost:3000/api/wallet/deposit \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"amount": "150.00", "idempotencyKey": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"}'
+
+# Transfer to another user by email
+curl -X POST http://localhost:3000/api/wallet/transfer \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"toEmail": "recipient@example.com", "amount": "40.00"}'
+
+# List own transactions (paginated)
+curl "http://localhost:3000/api/wallet/transactions?page=1&limit=20" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Reverse a transaction (admin token required)
+curl -X POST http://localhost:3000/api/wallet/transactions/<transaction-id>/reverse \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+### Testing
+
+- `pnpm test` — unit tests for the pure domain rules (`src/modules/wallet/wallet-rules.spec.ts`:
+  balance sufficiency, self-transfer, reversal eligibility, reversal wallet-id computation,
+  participant check) and money primitives (`decimal.transformer.spec.ts`,
+  `is-positive-decimal-string.validator.spec.ts`).
+- `pnpm test:e2e` — integration tests (`test/wallet.e2e-spec.ts`) against a real Postgres
+  (`docker-compose up -d` first, with `DATABASE_URL` matching `docker-compose.yml`). They boot the
+  full `AppModule` and cover the deposit → transfer → reverse lifecycle plus the tricky paths:
+  concurrent transfers, opposite-direction deadlock avoidance, idempotent-retry races,
+  double-reversal races, and the authorization rules (including reversal-viewer permanence after
+  role revocation).
+
 ## Deployment
 
 When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
