@@ -9,6 +9,10 @@ import { Transaction } from '../../shared/entities/transaction.entity';
 import { Wallet } from '../../shared/entities/wallet.entity';
 import { UsersService } from '../users/users.service';
 import { DepositDTO } from './dto/deposit.dto';
+import {
+  AdminUserWalletResponseDTO,
+  AdminWalletListResponseDTO,
+} from './dto/admin-wallet-response.dto';
 import { TransactionListResponseDTO, TransactionResponseDTO } from './dto/transaction-response.dto';
 import { TransferDTO } from './dto/transfer.dto';
 import { WalletResponseDTO } from './dto/wallet-response.dto';
@@ -119,6 +123,66 @@ export class WalletService {
     }
 
     return this.toTransactionResponse(transaction);
+  }
+
+  async getTransactionForAdmin(transactionId: string): Promise<TransactionResponseDTO> {
+    const transaction = await this.transactionRepository.findOne({ where: { id: transactionId } });
+    if (!transaction) {
+      throw new NotFoundException('Transação não encontrada');
+    }
+    return this.toTransactionResponse(transaction);
+  }
+
+  async listAllWallets(page: number, limit: number): Promise<AdminWalletListResponseDTO> {
+    const [wallets, total] = await this.walletRepository.findAndCount({
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    const items = await Promise.all(
+      wallets.map(async (wallet) => {
+        const user = await this.usersService.findById(wallet.userId);
+        return {
+          ...this.toWalletResponse(wallet),
+          userId: wallet.userId,
+          userEmail: user?.email ?? 'unknown',
+          userName: user?.name ?? null,
+        };
+      }),
+    );
+
+    return { wallets: items, total, page, limit };
+  }
+
+  async getWalletByUserId(userId: string): Promise<AdminUserWalletResponseDTO> {
+    const user = await this.usersService.findById(userId);
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado');
+    }
+
+    const wallet = await this.getOrCreateWallet(userId);
+    return {
+      ...this.toWalletResponse(wallet),
+      userId: user.id,
+      userEmail: user.email,
+      userName: user.name,
+    };
+  }
+
+  async listAllTransactions(page: number, limit: number): Promise<TransactionListResponseDTO> {
+    const [transactions, total] = await this.transactionRepository.findAndCount({
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return {
+      transactions: transactions.map((transaction) => this.toTransactionResponse(transaction)),
+      total,
+      page,
+      limit,
+    };
   }
 
   async deposit(userId: string, dto: DepositDTO): Promise<TransactionResponseDTO> {

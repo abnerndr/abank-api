@@ -103,6 +103,8 @@ export class UsersController {
   }
 
   @Get('stats')
+  @ReadUsers()
+  @UseGuards(AbilitiesGuard)
   @ApiOperation({ summary: 'Estatísticas dos usuários' })
   @ApiResponse({
     status: 200,
@@ -168,6 +170,8 @@ export class UsersController {
   }
 
   @Get(':id')
+  @ReadUsers()
+  @UseGuards(AbilitiesGuard)
   @ApiOperation({ summary: 'Obter usuário por ID' })
   @ApiParam({ name: 'id', description: 'ID do usuário' })
   @ApiResponse({
@@ -221,8 +225,10 @@ export class UsersController {
   }
 
   @Put(':id/verify')
+  @UpdateUsers()
+  @UseGuards(AbilitiesGuard)
   @ApiOperation({ summary: 'Verificar usuário manualmente' })
-  @ApiParam({ name: 'i  d', description: 'ID do usuário' })
+  @ApiParam({ name: 'id', description: 'ID do usuário' })
   @ApiResponse({
     status: 200,
     description: 'Usuário verificado com sucesso',
@@ -237,6 +243,8 @@ export class UsersController {
   }
 
   @Patch(':id/password')
+  @UpdateUsers()
+  @UseGuards(AbilitiesGuard)
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Definir nova senha para usuário' })
   @ApiParam({ name: 'id', description: 'ID do usuário' })

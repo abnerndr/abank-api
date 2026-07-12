@@ -3,6 +3,7 @@ import { CONFIG } from 'src/shared/constants/env';
 import { entities } from 'src/shared/entities';
 import { DataSource } from 'typeorm';
 import { seedRolesAndPermissions } from './role.seed';
+import { seedTestWallets } from './wallet.seed';
 
 async function runSeeds() {
   const dataSource = new DataSource({
@@ -21,6 +22,7 @@ async function runSeeds() {
     console.log('📦 Database connected successfully');
 
     await seedRolesAndPermissions(dataSource);
+    await seedTestWallets(dataSource);
 
     await dataSource.destroy();
     console.log('✅ Seed completed successfully!');

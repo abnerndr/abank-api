@@ -6,6 +6,7 @@ import { Wallet } from '../../shared/entities/wallet.entity';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
 import { WalletController } from './wallet.controller';
+import { AdminWalletController } from './admin-wallet.controller';
 import { WalletService } from './wallet.service';
 
 @Module({
@@ -14,7 +15,7 @@ import { WalletService } from './wallet.service';
     UsersModule,
     AuthModule,
   ],
-  controllers: [WalletController],
+  controllers: [WalletController, AdminWalletController],
   providers: [WalletService],
   exports: [WalletService],
 })
