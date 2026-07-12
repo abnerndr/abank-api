@@ -77,10 +77,9 @@ describe('isTransactionParticipant', () => {
     expect(isTransactionParticipant(tx, 'requester', null)).toBe(true);
   });
 
-  it('grants access to the requester even when they have no wallet', () => {
+  it('grants access to the requester even when their wallet is unrelated to the transaction', () => {
     // This is the audit-trail permanence case: e.g. an admin who reversed a transaction and no
-    // longer holds the admin role (so they reach this check) and never owned a wallet in it.
-    expect(isTransactionParticipant(tx, 'requester', null)).toBe(true);
+    // longer holds the admin role (so they reach this check) and never participated via a wallet.
     expect(isTransactionParticipant(tx, 'requester', 'some-unrelated-wallet')).toBe(true);
   });
 

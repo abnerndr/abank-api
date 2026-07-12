@@ -570,9 +570,10 @@ describe('Wallet (e2e)', () => {
         .expect(404);
     });
 
-    // Authorization is re-derived from the database on every request (see jwt-auth.guard /
-    // AbilitiesGuard, which both reload roles via findByIdWithRoles), so revoking a role takes
-    // effect immediately even for an already-issued token. This test pins down the deliberate
+    // Authorization is re-derived from the database on every request: the global JwtAuthGuard
+    // reloads the user's roles via findByIdWithRoles and rebuilds request.user, and AbilitiesGuard
+    // then evaluates CASL over those freshly-loaded roles. So revoking a role takes effect
+    // immediately even for an already-issued token. This test pins down the deliberate
     // asymmetry that produced Task 9's "with fixes" review: revoking `admin` stops the user from
     // performing new admin actions, but the reversal they already performed stays visible to
     // them forever via `requestedByUserId` (audit-trail permanence, see wallet-rules.ts).
