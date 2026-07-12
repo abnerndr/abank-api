@@ -29,6 +29,30 @@ export function assertReversible(transaction: {
   }
 }
 
+/**
+ * Who is allowed to read a transaction (non-admins). A caller qualifies as a participant in
+ * two ways:
+ *
+ * 1. They requested it (`requestedByUserId`). This grants *permanent* read access to whoever
+ *    performed the action, and is deliberately independent of any role. In particular, an admin
+ *    who reverses a transaction stays able to view that reversal forever, even after their
+ *    `admin` role is revoked — the role gates *performing* new admin actions, not seeing the
+ *    ones already taken. This is audit-trail semantics: "whoever did it can always see that they
+ *    did it". It is intentional, not a leak.
+ * 2. Their wallet was the source or destination (`fromWalletId`/`toWalletId`). `walletId` is
+ *    null when the caller never had a wallet, in which case only the requester path applies.
+ */
+export function isTransactionParticipant(
+  transaction: { requestedByUserId: string; fromWalletId: string | null; toWalletId: string | null },
+  userId: string,
+  walletId: string | null,
+): boolean {
+  if (transaction.requestedByUserId === userId) {
+    return true;
+  }
+  return walletId !== null && (transaction.fromWalletId === walletId || transaction.toWalletId === walletId);
+}
+
 export interface ReversalWalletIds {
   fromWalletId: string | null;
   toWalletId: string | null;

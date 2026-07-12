@@ -9,6 +9,7 @@ import {
   assertReversible,
   assertSufficientBalance,
   computeReversalWalletIds,
+  isTransactionParticipant,
 } from './wallet-rules';
 
 describe('assertSufficientBalance', () => {
@@ -62,6 +63,50 @@ describe('assertReversible', () => {
     expect(() =>
       assertReversible({ type: TransactionType.REVERSAL, status: TransactionStatus.COMPLETED }),
     ).toThrow(InvalidReversalTargetException);
+  });
+});
+
+describe('isTransactionParticipant', () => {
+  const tx = {
+    requestedByUserId: 'requester',
+    fromWalletId: 'wallet-from',
+    toWalletId: 'wallet-to',
+  };
+
+  it('grants access to the user who requested the transaction', () => {
+    expect(isTransactionParticipant(tx, 'requester', null)).toBe(true);
+  });
+
+  it('grants access to the requester even when they have no wallet', () => {
+    // This is the audit-trail permanence case: e.g. an admin who reversed a transaction and no
+    // longer holds the admin role (so they reach this check) and never owned a wallet in it.
+    expect(isTransactionParticipant(tx, 'requester', null)).toBe(true);
+    expect(isTransactionParticipant(tx, 'requester', 'some-unrelated-wallet')).toBe(true);
+  });
+
+  it('grants access when the caller wallet is the source', () => {
+    expect(isTransactionParticipant(tx, 'someone-else', 'wallet-from')).toBe(true);
+  });
+
+  it('grants access when the caller wallet is the destination', () => {
+    expect(isTransactionParticipant(tx, 'someone-else', 'wallet-to')).toBe(true);
+  });
+
+  it('denies a non-requester whose wallet is unrelated', () => {
+    expect(isTransactionParticipant(tx, 'someone-else', 'wallet-other')).toBe(false);
+  });
+
+  it('denies a non-requester with no wallet', () => {
+    expect(isTransactionParticipant(tx, 'someone-else', null)).toBe(false);
+  });
+
+  it('does not treat a null wallet id as matching a transaction with a null side', () => {
+    const depositReversalOut = {
+      requestedByUserId: 'admin',
+      fromWalletId: 'wallet-x',
+      toWalletId: null,
+    };
+    expect(isTransactionParticipant(depositReversalOut, 'someone-else', null)).toBe(false);
   });
 });
 

@@ -20,6 +20,7 @@ import {
   assertReversible,
   assertSufficientBalance,
   computeReversalWalletIds,
+  isTransactionParticipant,
 } from './wallet-rules';
 
 @Injectable()
@@ -107,11 +108,12 @@ export class WalletService {
 
     if (!isAdmin) {
       const wallet = await this.walletRepository.findOne({ where: { userId } });
-      const isParticipant =
-        transaction.requestedByUserId === userId ||
-        (!!wallet && (transaction.fromWalletId === wallet.id || transaction.toWalletId === wallet.id));
-
-      if (!isParticipant) {
+      // Note the `requestedByUserId` branch inside isTransactionParticipant: whoever requested
+      // this transaction keeps read access to it permanently, regardless of their current roles.
+      // So an admin who performed a reversal can still GET that reversal here even after being
+      // demoted — `isAdmin` is now false, but they still match as the requester. That is
+      // deliberate audit-trail behaviour, not a missing authorization check (see wallet-rules.ts).
+      if (!isTransactionParticipant(transaction, userId, wallet?.id ?? null)) {
         throw new ForbiddenException('Sem permissão para ver esta transação');
       }
     }

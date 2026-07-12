@@ -4,7 +4,9 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import Decimal from 'decimal.js';
 import * as request from 'supertest';
+import { Repository } from 'typeorm';
 import { AppModule } from '../src/app.module';
+import { User } from '../src/shared/entities/user.entity';
 import { Wallet } from '../src/shared/entities/wallet.entity';
 import { createAuthenticatedUser } from './utils/create-authenticated-user';
 
@@ -566,6 +568,59 @@ describe('Wallet (e2e)', () => {
         .get('/api/wallet/transactions/00000000-0000-7000-8000-000000000000')
         .set('Authorization', `Bearer ${a.accessToken}`)
         .expect(404);
+    });
+
+    // Authorization is re-derived from the database on every request (see jwt-auth.guard /
+    // AbilitiesGuard, which both reload roles via findByIdWithRoles), so revoking a role takes
+    // effect immediately even for an already-issued token. This test pins down the deliberate
+    // asymmetry that produced Task 9's "with fixes" review: revoking `admin` stops the user from
+    // performing new admin actions, but the reversal they already performed stays visible to
+    // them forever via `requestedByUserId` (audit-trail permanence, see wallet-rules.ts).
+    it('keeps a reversal visible to the admin who performed it after their admin role is revoked, while blocking new admin actions', async () => {
+      const admin = await createAuthenticatedUser(app, { roles: ['admin'] });
+      const user = await createAuthenticatedUser(app);
+
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .send({ amount: '40.00' })
+        .expect(201);
+
+      const reversal = await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${deposit.body.id}/reverse`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+      expect(reversal.body.requestedByUserId).toBe(admin.userId);
+
+      // Revoke the admin role through the repository (not raw SQL) by clearing the owning-side
+      // join rows for this user only, leaving the shared `admin` role row intact for other tests.
+      const usersRepository = app.get<Repository<User>>(getRepositoryToken(User));
+      const adminEntity = await usersRepository.findOne({
+        where: { id: admin.userId },
+        relations: ['roles'],
+      });
+      expect(adminEntity).not.toBeNull();
+      adminEntity!.roles = [];
+      await usersRepository.save(adminEntity!);
+
+      // Revocation is real: a brand-new admin-only action with the same token is now forbidden.
+      const anotherDeposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .send({ amount: '10.00' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${anotherDeposit.body.id}/reverse`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(403);
+
+      // But the reversal they already performed is still visible to them — the ex-admin never
+      // owned a wallet in it, so this can only pass through the `requestedByUserId` path.
+      const stillVisible = await request(app.getHttpServer())
+        .get(`/api/wallet/transactions/${reversal.body.id}`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+      expect(stillVisible.body.id).toBe(reversal.body.id);
     });
   });
 });
