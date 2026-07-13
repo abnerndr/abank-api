@@ -1,6 +1,6 @@
 import 'dotenv/config';
+import { clearDatabase } from './clear-database';
 import { createSeedDataSource } from './seed-data-source';
-import { runSeeds } from './run-seeds';
 
 async function main() {
   const dataSource = createSeedDataSource();
@@ -9,13 +9,13 @@ async function main() {
     await dataSource.initialize();
     console.log('📦 Database connected successfully');
 
-    await runSeeds(dataSource);
+    await clearDatabase(dataSource);
 
     await dataSource.destroy();
-    console.log('✅ Seed completed successfully!');
+    console.log('✅ Database cleared successfully!');
     process.exit(0);
   } catch (error) {
-    console.error('❌ Error running seeds:', error);
+    console.error('❌ Error clearing database:', error);
     if (dataSource.isInitialized) {
       await dataSource.destroy();
     }

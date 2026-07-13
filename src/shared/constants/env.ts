@@ -16,7 +16,7 @@ export const CONFIG: AppConfigProps = {
   VERSION,
   PORT: Number(process.env.PORT) || 3000,
   NODE_ENV: process.env.NODE_ENV ?? 'development',
-  FRONTEND_URL: APP_URL || BACKOFFICE_URL,
+  FRONTEND_URL: APP_URL,
   CORS_ORIGIN: [APP_URL, BACKOFFICE_URL].join(',') ?? '*',
   DATABASE_URL: process.env.DATABASE_URL || '',
   MAIL: {

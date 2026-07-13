@@ -48,7 +48,12 @@ export class AuthService {
       verificationToken,
     });
 
-    await this.mailService.sendVerificationEmail(user.email, verificationToken);
+    try {
+      await this.mailService.sendVerificationEmail(user.email, verificationToken);
+    } catch (error) {
+      await this.usersService.deleteUser(user.id);
+      throw error;
+    }
 
     return {
       message: 'Registration successful. Check your email for verification.',

@@ -21,12 +21,12 @@ export class MailService {
   private readonly apiKey: string;
   private readonly from: string;
   private readonly name: string;
-  private readonly frontendUrl: string;
+  private readonly appUrl: string;
   constructor() {
     this.apiKey = CONFIG.MAIL.API_KEY;
     this.from = CONFIG.MAIL.FROM;
     this.name = CONFIG.MAIL.NAME;
-    this.frontendUrl = CONFIG.CORS_ORIGIN;
+    this.appUrl = CONFIG.FRONTEND_URL;
     this.logger.log('Mailer sender Mail service initialized successfully');
   }
 
@@ -46,7 +46,7 @@ export class MailService {
         subject: template.subject,
         text: template.text || 'Please enable HTML to view this email properly.',
         html: template.html,
-      } as sgMail.MailDataRequired;
+      };
 
       const result = await sgMail.send(messageData);
       this.logger.log(`Email sent successfully to ${to} via SendGrid`);
@@ -58,31 +58,31 @@ export class MailService {
   }
 
   async sendVerificationEmail(email: string, token: string) {
-    const verificationUrl = `${this.frontendUrl}/auth/verify-email?token=${token}`;
+    const verificationUrl = `${this.appUrl}/auth/verify-email?token=${token}`;
     const template: EmailTemplate = new VerificationMailTemplate(verificationUrl);
     return await this.sendMail(email, template);
   }
 
   async sendMagicLink(email: string, token: string) {
-    const magicLinkUrl = `${this.frontendUrl}/auth/magic-link?token=${token}`;
+    const magicLinkUrl = `${this.appUrl}/auth/magic-link?token=${token}`;
     const template: EmailTemplate = new MagicLinkMailTemplate(magicLinkUrl);
     return await this.sendMail(email, template);
   }
 
   async sendPasswordReset(email: string, token: string) {
-    const resetUrl = `${this.frontendUrl}/auth/reset-password?token=${token}`;
+    const resetUrl = `${this.appUrl}/auth/reset-password?token=${token}`;
     const template: EmailTemplate = new PasswordResetMailTemplate(resetUrl);
     return await this.sendMail(email, template);
   }
 
   async sendWelcomeEmail(email: string, name: string) {
-    const dashboardUrl = `${this.frontendUrl}/dashboard`;
+    const dashboardUrl = `${this.appUrl}/dashboard`;
     const template: EmailTemplate = new WelcomeMailTemplate(name, dashboardUrl);
     return await this.sendMail(email, template);
   }
 
   async sendPasswordChangedNotification(email: string, name: string) {
-    const supportUrl = `${this.frontendUrl}/support`;
+    const supportUrl = `${this.appUrl}/support`;
     const changeTimestamp = new Date().toLocaleString();
     const template: EmailTemplate = new PasswordChangedNotificationTemplate(
       name,
@@ -93,7 +93,7 @@ export class MailService {
   }
 
   async sendLoginNotification(email: string, name: string, ipAddress?: string, userAgent?: string) {
-    const changePasswordUrl = `${this.frontendUrl}/auth/change-password`;
+    const changePasswordUrl = `${this.appUrl}/auth/change-password`;
     const loginTimestamp = new Date().toLocaleString();
     const template: EmailTemplate = new LoginNotificationMailTemplate(
       name,
