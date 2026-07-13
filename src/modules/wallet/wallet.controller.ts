@@ -16,6 +16,7 @@ import { ManageTransactions } from '../auth/decorators/check-abilities.decorator
 import { CurrentUser, CurrentUserData } from '../auth/decorators/current-user.decorator';
 import { AbilitiesGuard } from '../auth/guards/abilities.guard';
 import { DepositDTO } from './dto/deposit.dto';
+import { CreateRefundRequestDTO, RefundRequestResponseDTO } from './dto/refund-request.dto';
 import { TransactionQueryDTO } from './dto/transaction-query.dto';
 import { TransactionListResponseDTO, TransactionResponseDTO } from './dto/transaction-response.dto';
 import { TransferDTO } from './dto/transfer.dto';
@@ -114,5 +115,25 @@ export class WalletController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<TransactionResponseDTO> {
     return this.walletService.reverse(user.id, id);
+  }
+
+  @Post('transactions/:id/refund-request')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Solicitar estorno de uma transação' })
+  @ApiBody({ type: CreateRefundRequestDTO })
+  @ApiResponse({
+    status: 201,
+    description: 'Solicitação de estorno criada com sucesso',
+    type: RefundRequestResponseDTO,
+  })
+  @ApiResponse({ status: 403, description: 'Sem permissão para solicitar estorno desta transação' })
+  @ApiResponse({ status: 404, description: 'Transação não encontrada' })
+  @ApiResponse({ status: 409, description: 'Já existe solicitação pendente para esta transação' })
+  async createRefundRequest(
+    @CurrentUser() user: CurrentUserData,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CreateRefundRequestDTO,
+  ): Promise<RefundRequestResponseDTO> {
+    return this.walletService.createRefundRequest(user.id, isAdmin(user), id, dto);
   }
 }

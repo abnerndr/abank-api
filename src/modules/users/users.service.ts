@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcryptjs';
-import { FindManyOptions, In, Like, Repository } from 'typeorm';
+import { FindManyOptions, In, Like, Not, Repository } from 'typeorm';
 import { Role } from '../../shared/entities/role.entity';
 import { User } from '../../shared/entities/user.entity';
 import { ChangePasswordDTO } from './dto/change-password.dto copy';
@@ -174,9 +174,20 @@ export class UsersService {
       limit = 10,
       search,
       isVerified,
+      excludeEmailPrefix,
       sortBy = 'createdAt',
       sortOrder = 'DESC',
     } = queryDto;
+
+    const baseWhere: Record<string, unknown> = {};
+
+    if (isVerified !== undefined) {
+      baseWhere.isVerified = isVerified;
+    }
+
+    if (excludeEmailPrefix) {
+      baseWhere.email = Not(Like(`${excludeEmailPrefix}%`));
+    }
 
     const queryOptions: FindManyOptions<User> = {
       relations: ['roles'],
@@ -185,19 +196,14 @@ export class UsersService {
       take: limit,
     };
 
-    // Filtros
-    const where: any = {};
-
     if (search) {
-      where.name = Like(`%${search}%`);
-      // Ou usar uma condição mais complexa para buscar em nome e email
+      queryOptions.where = [
+        { ...baseWhere, name: Like(`%${search}%`) },
+        { ...baseWhere, email: Like(`%${search}%`) },
+      ];
+    } else {
+      queryOptions.where = baseWhere;
     }
-
-    if (isVerified !== undefined) {
-      where.isVerified = isVerified;
-    }
-
-    queryOptions.where = where;
 
     const [users, total] = await this.usersRepository.findAndCount(queryOptions);
 
@@ -216,6 +222,16 @@ export class UsersService {
       throw new NotFoundException('Usuário não encontrado');
     }
     return user;
+  }
+
+  async findByIds(ids: string[]): Promise<User[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    return this.usersRepository.find({
+      where: { id: In(ids) },
+    });
   }
 
   async deleteUser(id: string): Promise<void> {
@@ -258,22 +274,37 @@ export class UsersService {
     });
   }
 
-  async getUserStats(): Promise<{
+  async getUserStats(excludeEmailPrefix?: string): Promise<{
     total: number;
     verified: number;
     unverified: number;
     withGoogle: number;
   }> {
-    const total = await this.usersRepository.count();
-    const verified = await this.usersRepository.count({
-      where: { isVerified: true },
-    });
-    const unverified = await this.usersRepository.count({
-      where: { isVerified: false },
-    });
-    const withGoogle = await this.usersRepository.count({
-      where: { googleId: Like('%') },
-    });
+    const applyExclusion = (qb: ReturnType<Repository<User>['createQueryBuilder']>) => {
+      if (excludeEmailPrefix) {
+        qb.andWhere('user.email NOT LIKE :excludePrefix', {
+          excludePrefix: `${excludeEmailPrefix}%`,
+        });
+      }
+      return qb;
+    };
+
+    const total = await applyExclusion(this.usersRepository.createQueryBuilder('user')).getCount();
+    const verified = await applyExclusion(
+      this.usersRepository.createQueryBuilder('user').andWhere('user.isVerified = :verified', {
+        verified: true,
+      }),
+    ).getCount();
+    const unverified = await applyExclusion(
+      this.usersRepository.createQueryBuilder('user').andWhere('user.isVerified = :verified', {
+        verified: false,
+      }),
+    ).getCount();
+    const withGoogle = await applyExclusion(
+      this.usersRepository
+        .createQueryBuilder('user')
+        .andWhere('user.googleId IS NOT NULL'),
+    ).getCount();
 
     return {
       total,

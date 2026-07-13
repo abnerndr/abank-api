@@ -57,6 +57,31 @@ $ pnpm run test:e2e
 $ pnpm run test:cov
 ```
 
+## ABank — Teste técnico
+
+Solução completa de carteira digital em três repositórios:
+
+| Repositório | Papel |
+|-------------|-------|
+| **abank-api** (este) | API NestJS + Postgres — auth, wallet, ledger |
+| **abank-app** | App cliente Next.js + Server Actions |
+| **abank-backoffice** | Painel admin — usuários, estornos, transações |
+
+**Guias de apresentação:**
+
+- [`docs/DEMO.md`](docs/DEMO.md) — roteiro de demonstração passo a passo
+- [`docs/REVERSAL.md`](docs/REVERSAL.md) — como a reversão atende "por solicitação do usuário"
+
+**Stack e justificativa:** NestJS (modularidade, DI, guards), Fastify (performance), TypeORM
+(transações ACID), Postgres, `decimal.js` (dinheiro sem float), CASL (autorização), double-entry
+ledger (auditoria). Frontends em Next.js com Server Actions para JWT em cookies httpOnly.
+
+```bash
+docker compose up -d    # Postgres (+ API com serviço api)
+pnpm seed               # admin + contas alice/bob
+pnpm start:dev          # API
+```
+
 ## Wallet
 
 Financial wallet domain: deposit, transfer between users, and admin-only reversal, built on top
@@ -80,8 +105,9 @@ of the existing auth/users infrastructure. Full design rationale in
   transfers on the same balance can't overdraw it. When two wallets are locked (transfer, reversal)
   they are always locked in a deterministic order — sorted by the **owning user's id** — so two
   operations touching the same pair in opposite directions can never deadlock against each other.
-- **Idempotency.** `deposit`/`transfer` accept an optional `idempotencyKey`, unique per requesting
-  user (partial unique index). Re-sending the same key replays the already-processed transaction
+- **Idempotency.** `deposit`/`transfer` require an `idempotencyKey`, unique per requesting
+  user **and operation type** (`DEPOSIT` vs `TRANSFER` — same key string can be reused across
+  different operation types). Re-sending the same key replays the already-processed transaction
   instead of reprocessing. Under a race, the losing insert is caught by inspecting the Postgres
   error (`code === '23505'` + the offending column in `error.detail`, not `error.message`) and the
   original transaction is returned.
@@ -90,7 +116,8 @@ of the existing auth/users infrastructure. Full design rationale in
   already spent the funds is expected to push their wallet negative — a later deposit simply adds on
   top of that negative balance. A partial unique index on `reversalOfId` is the DB-level backstop
   against double-reversal: two concurrent reversals of the same transaction yield one `200` and one
-  `409`.
+  `409`. User-initiated reversal is modeled as an **operational flow**: the customer reports the
+  issue, an admin executes the reversal in the backoffice (`/estornos`). See `docs/REVERSAL.md`.
 - **`:id` routes use `ParseUUIDPipe`**, returning a clean `400` for a malformed id instead of a raw
   500 from a Postgres cast error (this app has no global exception filter).
 - **Transaction visibility.** `GET /api/wallet/transactions/:id` is allowed for an admin or a
@@ -119,15 +146,15 @@ Interactive API docs are served at `/docs`.
 The server listens on `PORT` (default `3000`). Adjust the host/port below to your `.env`.
 
 ```bash
-# Deposit (optional idempotencyKey replays instead of double-charging)
+# Deposit (idempotencyKey required — replays instead of double-charging)
 curl -X POST http://localhost:3000/api/wallet/deposit \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"amount": "150.00", "idempotencyKey": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"}'
 
-# Transfer to another user by email
+# Transfer to another user by email (idempotencyKey required)
 curl -X POST http://localhost:3000/api/wallet/transfer \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"toEmail": "recipient@example.com", "amount": "40.00"}'
+  -d '{"toEmail": "recipient@example.com", "amount": "40.00", "idempotencyKey": "b2c3d4e5-f6a7-8901-bcde-f12345678901"}'
 
 # List own transactions (paginated)
 curl "http://localhost:3000/api/wallet/transactions?page=1&limit=20" \
@@ -144,12 +171,25 @@ curl -X POST http://localhost:3000/api/wallet/transactions/<transaction-id>/reve
   balance sufficiency, self-transfer, reversal eligibility, reversal wallet-id computation,
   participant check) and money primitives (`decimal.transformer.spec.ts`,
   `is-positive-decimal-string.validator.spec.ts`).
-- `pnpm test:e2e` — integration tests (`test/wallet.e2e-spec.ts`) against a real Postgres
-  (`docker-compose up -d` first, with `DATABASE_URL` matching `docker-compose.yml`). They boot the
-  full `AppModule` and cover the deposit → transfer → reverse lifecycle plus the tricky paths:
-  concurrent transfers, opposite-direction deadlock avoidance, idempotent-retry races,
-  double-reversal races, and the authorization rules (including reversal-viewer permanence after
-  role revocation).
+- `pnpm test:e2e` — integration tests (`test/wallet.e2e-spec.ts`, `test/app.e2e-spec.ts`) against a
+  real Postgres (`docker compose up -d` first, with `DATABASE_URL` matching `docker-compose.yml`).
+  They boot the full `AppModule` and cover the deposit → transfer → reverse lifecycle plus the
+  tricky paths: concurrent transfers, opposite-direction deadlock avoidance, idempotent-retry
+  races, double-reversal races, and the authorization rules (including reversal-viewer permanence
+  after role revocation).
+
+### Docker
+
+```bash
+# Postgres only (desenvolvimento local com pnpm start:dev)
+docker compose up -d db
+
+# Postgres + API containerizada
+docker compose up -d --build
+```
+
+The `api` service uses `NODE_ENV=development` with `synchronize` enabled against the local Docker
+Postgres — suitable for demos. For production, run migrations and set `NODE_ENV=production`.
 
 ## Deployment
 

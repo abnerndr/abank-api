@@ -9,6 +9,7 @@ import { AppModule } from '../src/app.module';
 import { User } from '../src/shared/entities/user.entity';
 import { Wallet } from '../src/shared/entities/wallet.entity';
 import { createAuthenticatedUser } from './utils/create-authenticated-user';
+import { depositBody, transferBody } from './utils/wallet-request-bodies';
 
 describe('Wallet (e2e)', () => {
   let app: INestApplication;
@@ -55,7 +56,7 @@ describe('Wallet (e2e)', () => {
       const response = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${accessToken}`)
-        .send({ amount: '150.00' })
+        .send(depositBody('150.00'))
         .expect(201);
 
       expect(response.body.type).toBe('DEPOSIT');
@@ -84,7 +85,7 @@ describe('Wallet (e2e)', () => {
       const response = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${accessToken}`)
-        .send({ amount: '25.00' })
+        .send(depositBody('25.00'))
         .expect(201);
 
       expect(response.body.amount).toBe('25.0000');
@@ -103,13 +104,13 @@ describe('Wallet (e2e)', () => {
       const first = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${accessToken}`)
-        .send({ amount: '10.00', idempotencyKey })
+        .send(depositBody('10.00', idempotencyKey))
         .expect(201);
 
       const second = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${accessToken}`)
-        .send({ amount: '10.00', idempotencyKey })
+        .send(depositBody('10.00', idempotencyKey))
         .expect(201);
 
       expect(second.body.id).toBe(first.body.id);
@@ -129,11 +130,11 @@ describe('Wallet (e2e)', () => {
         request(app.getHttpServer())
           .post('/api/wallet/deposit')
           .set('Authorization', `Bearer ${accessToken}`)
-          .send({ amount: '10.00', idempotencyKey }),
+          .send(depositBody('10.00', idempotencyKey)),
         request(app.getHttpServer())
           .post('/api/wallet/deposit')
           .set('Authorization', `Bearer ${accessToken}`)
-          .send({ amount: '10.00', idempotencyKey }),
+          .send(depositBody('10.00', idempotencyKey)),
       ]);
 
       expect(first.status).toBe(201);
@@ -153,8 +154,44 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${accessToken}`)
-        .send({ amount: '0.00' })
+        .send(depositBody('0.00'))
         .expect(400);
+    });
+
+    it('rejects a deposit without idempotencyKey', async () => {
+      const { accessToken } = await createAuthenticatedUser(app);
+
+      await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ amount: '10.00' })
+        .expect(400);
+    });
+
+    it('scopes idempotency by operation type (deposit vs transfer)', async () => {
+      const { accessToken } = await createAuthenticatedUser(app);
+      const recipient = await createAuthenticatedUser(app);
+      const sharedKey = 'shared-op-key';
+
+      await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send(depositBody('50.00', sharedKey))
+        .expect(201);
+
+      const transfer = await request(app.getHttpServer())
+        .post('/api/wallet/transfer')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send(transferBody(recipient.email, '10.00', sharedKey))
+        .expect(201);
+
+      expect(transfer.body.type).toBe('TRANSFER');
+
+      const wallet = await request(app.getHttpServer())
+        .get('/api/wallet/me')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      expect(wallet.body.balance).toBe('40.0000');
     });
   });
 
@@ -165,13 +202,13 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${sender.accessToken}`)
-        .send({ amount: '100.00' })
+        .send(depositBody('100.00'))
         .expect(201);
 
       const response = await request(app.getHttpServer())
         .post('/api/wallet/transfer')
         .set('Authorization', `Bearer ${sender.accessToken}`)
-        .send({ toEmail: recipient.email, amount: '40.00' })
+        .send(transferBody(recipient.email, '40.00'))
         .expect(201);
 
       expect(response.body.type).toBe('TRANSFER');
@@ -197,7 +234,7 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/transfer')
         .set('Authorization', `Bearer ${sender.accessToken}`)
-        .send({ toEmail: recipient.email, amount: '1.00' })
+        .send(transferBody(recipient.email, '1.00'))
         .expect(400);
     });
 
@@ -206,13 +243,13 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${sender.accessToken}`)
-        .send({ amount: '10.00' })
+        .send(depositBody('10.00'))
         .expect(201);
 
       await request(app.getHttpServer())
         .post('/api/wallet/transfer')
         .set('Authorization', `Bearer ${sender.accessToken}`)
-        .send({ toEmail: sender.email, amount: '1.00' })
+        .send(transferBody(sender.email, '1.00'))
         .expect(400);
     });
 
@@ -221,13 +258,13 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${sender.accessToken}`)
-        .send({ amount: '10.00' })
+        .send(depositBody('10.00'))
         .expect(201);
 
       await request(app.getHttpServer())
         .post('/api/wallet/transfer')
         .set('Authorization', `Bearer ${sender.accessToken}`)
-        .send({ toEmail: 'nobody@example.com', amount: '1.00' })
+        .send(transferBody('nobody@example.com', '1.00'))
         .expect(404);
     });
 
@@ -238,18 +275,18 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${sender.accessToken}`)
-        .send({ amount: '100.00' })
+        .send(depositBody('100.00'))
         .expect(201);
 
       const results = await Promise.all([
         request(app.getHttpServer())
           .post('/api/wallet/transfer')
           .set('Authorization', `Bearer ${sender.accessToken}`)
-          .send({ toEmail: recipientA.email, amount: '80.00' }),
+          .send(transferBody(recipientA.email, '80.00')),
         request(app.getHttpServer())
           .post('/api/wallet/transfer')
           .set('Authorization', `Bearer ${sender.accessToken}`)
-          .send({ toEmail: recipientB.email, amount: '80.00' }),
+          .send(transferBody(recipientB.email, '80.00')),
       ]);
 
       const statuses = results.map((r) => r.status).sort();
@@ -268,23 +305,23 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${userA.accessToken}`)
-        .send({ amount: '100.00' })
+        .send(depositBody('100.00'))
         .expect(201);
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${userB.accessToken}`)
-        .send({ amount: '100.00' })
+        .send(depositBody('100.00'))
         .expect(201);
 
       const [aToB, bToA] = await Promise.all([
         request(app.getHttpServer())
           .post('/api/wallet/transfer')
           .set('Authorization', `Bearer ${userA.accessToken}`)
-          .send({ toEmail: userB.email, amount: '30.00' }),
+          .send(transferBody(userB.email, '30.00')),
         request(app.getHttpServer())
           .post('/api/wallet/transfer')
           .set('Authorization', `Bearer ${userB.accessToken}`)
-          .send({ toEmail: userA.email, amount: '20.00' }),
+          .send(transferBody(userA.email, '20.00')),
       ]);
 
       expect(aToB.status).toBe(201);
@@ -309,7 +346,7 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${sender.accessToken}`)
-        .send({ amount: '100.00' })
+        .send(depositBody('100.00'))
         .expect(201);
       const idempotencyKey = 'transfer-race-key';
 
@@ -317,11 +354,11 @@ describe('Wallet (e2e)', () => {
         request(app.getHttpServer())
           .post('/api/wallet/transfer')
           .set('Authorization', `Bearer ${sender.accessToken}`)
-          .send({ toEmail: recipient.email, amount: '30.00', idempotencyKey }),
+          .send(transferBody(recipient.email, '30.00', idempotencyKey)),
         request(app.getHttpServer())
           .post('/api/wallet/transfer')
           .set('Authorization', `Bearer ${sender.accessToken}`)
-          .send({ toEmail: recipient.email, amount: '30.00', idempotencyKey }),
+          .send(transferBody(recipient.email, '30.00', idempotencyKey)),
       ]);
 
       expect(first.status).toBe(201);
@@ -342,7 +379,7 @@ describe('Wallet (e2e)', () => {
       const deposit = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${user.accessToken}`)
-        .send({ amount: '10.00' })
+        .send(depositBody('10.00'))
         .expect(201);
 
       await request(app.getHttpServer())
@@ -357,7 +394,7 @@ describe('Wallet (e2e)', () => {
       const deposit = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${user.accessToken}`)
-        .send({ amount: '30.00' })
+        .send(depositBody('30.00'))
         .expect(201);
 
       const reversal = await request(app.getHttpServer())
@@ -384,19 +421,19 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${a.accessToken}`)
-        .send({ amount: '100.00' })
+        .send(depositBody('100.00'))
         .expect(201);
 
       const transfer = await request(app.getHttpServer())
         .post('/api/wallet/transfer')
         .set('Authorization', `Bearer ${a.accessToken}`)
-        .send({ toEmail: b.email, amount: '100.00' })
+        .send(transferBody(b.email, '100.00'))
         .expect(201);
 
       await request(app.getHttpServer())
         .post('/api/wallet/transfer')
         .set('Authorization', `Bearer ${b.accessToken}`)
-        .send({ toEmail: c.email, amount: '100.00' })
+        .send(transferBody(c.email, '100.00'))
         .expect(201);
 
       await request(app.getHttpServer())
@@ -419,7 +456,7 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${b.accessToken}`)
-        .send({ amount: '30.00' })
+        .send(depositBody('30.00'))
         .expect(201);
 
       const bWalletAfterDeposit = await request(app.getHttpServer())
@@ -435,7 +472,7 @@ describe('Wallet (e2e)', () => {
       const deposit = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${user.accessToken}`)
-        .send({ amount: '10.00' })
+        .send(depositBody('10.00'))
         .expect(201);
 
       await request(app.getHttpServer())
@@ -455,7 +492,7 @@ describe('Wallet (e2e)', () => {
       const deposit = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${user.accessToken}`)
-        .send({ amount: '10.00' })
+        .send(depositBody('10.00'))
         .expect(201);
 
       const [first, second] = await Promise.all([
@@ -486,12 +523,12 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${a.accessToken}`)
-        .send({ amount: '50.00' })
+        .send(depositBody('50.00'))
         .expect(201);
       await request(app.getHttpServer())
         .post('/api/wallet/transfer')
         .set('Authorization', `Bearer ${a.accessToken}`)
-        .send({ toEmail: b.email, amount: '20.00' })
+        .send(transferBody(b.email, '20.00'))
         .expect(201);
 
       const response = await request(app.getHttpServer())
@@ -518,12 +555,12 @@ describe('Wallet (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${a.accessToken}`)
-        .send({ amount: '50.00' })
+        .send(depositBody('50.00'))
         .expect(201);
       const transfer = await request(app.getHttpServer())
         .post('/api/wallet/transfer')
         .set('Authorization', `Bearer ${a.accessToken}`)
-        .send({ toEmail: b.email, amount: '20.00' })
+        .send(transferBody(b.email, '20.00'))
         .expect(201);
 
       await request(app.getHttpServer())
@@ -538,7 +575,7 @@ describe('Wallet (e2e)', () => {
       const deposit = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${a.accessToken}`)
-        .send({ amount: '50.00' })
+        .send(depositBody('50.00'))
         .expect(201);
 
       await request(app.getHttpServer())
@@ -553,7 +590,7 @@ describe('Wallet (e2e)', () => {
       const deposit = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${a.accessToken}`)
-        .send({ amount: '50.00' })
+        .send(depositBody('50.00'))
         .expect(201);
 
       await request(app.getHttpServer())
@@ -584,7 +621,7 @@ describe('Wallet (e2e)', () => {
       const deposit = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${user.accessToken}`)
-        .send({ amount: '40.00' })
+        .send(depositBody('40.00'))
         .expect(201);
 
       const reversal = await request(app.getHttpServer())
@@ -608,7 +645,7 @@ describe('Wallet (e2e)', () => {
       const anotherDeposit = await request(app.getHttpServer())
         .post('/api/wallet/deposit')
         .set('Authorization', `Bearer ${user.accessToken}`)
-        .send({ amount: '10.00' })
+        .send(depositBody('10.00'))
         .expect(201);
       await request(app.getHttpServer())
         .post(`/api/wallet/transactions/${anotherDeposit.body.id}/reverse`)
@@ -622,6 +659,132 @@ describe('Wallet (e2e)', () => {
         .set('Authorization', `Bearer ${admin.accessToken}`)
         .expect(200);
       expect(stillVisible.body.id).toBe(reversal.body.id);
+    });
+  });
+
+  describe('Refund requests', () => {
+    it('creates a refund request for a reversible transaction', async () => {
+      const admin = await createAuthenticatedUser(app, { roles: ['admin'] });
+      const user = await createAuthenticatedUser(app);
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .send(depositBody('25.00'))
+        .expect(201);
+
+      const response = await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${deposit.body.id}/refund-request`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({ reason: 'Crédito indevido' })
+        .expect(201);
+
+      expect(response.body.status).toBe('PENDING');
+      expect(response.body.transactionId).toBe(deposit.body.id);
+      expect(response.body.reason).toBe('Crédito indevido');
+    });
+
+    it('lists pending refund requests for admin', async () => {
+      const admin = await createAuthenticatedUser(app, { roles: ['admin'] });
+      const user = await createAuthenticatedUser(app);
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .send(depositBody('15.00'))
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${deposit.body.id}/refund-request`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({})
+        .expect(201);
+
+      const list = await request(app.getHttpServer())
+        .get('/api/admin/wallet/refund-requests')
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+
+      expect(list.body.total).toBeGreaterThanOrEqual(1);
+      expect(list.body.refundRequests.some((item: { transactionId: string }) => item.transactionId === deposit.body.id)).toBe(true);
+    });
+
+    it('approves a refund request and reverses the transaction', async () => {
+      const admin = await createAuthenticatedUser(app, { roles: ['admin'] });
+      const user = await createAuthenticatedUser(app);
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .send(depositBody('40.00'))
+        .expect(201);
+
+      const refundRequest = await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${deposit.body.id}/refund-request`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({})
+        .expect(201);
+
+      const approved = await request(app.getHttpServer())
+        .post(`/api/admin/wallet/refund-requests/${refundRequest.body.id}/approve`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+
+      expect(approved.body.status).toBe('APPROVED');
+
+      const wallet = await request(app.getHttpServer())
+        .get('/api/wallet/me')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .expect(200);
+      expect(wallet.body.balance).toBe('0.0000');
+    });
+
+    it('rejects a refund request without reversing the transaction', async () => {
+      const admin = await createAuthenticatedUser(app, { roles: ['admin'] });
+      const user = await createAuthenticatedUser(app);
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .send(depositBody('30.00'))
+        .expect(201);
+
+      const refundRequest = await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${deposit.body.id}/refund-request`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({})
+        .expect(201);
+
+      const rejected = await request(app.getHttpServer())
+        .post(`/api/admin/wallet/refund-requests/${refundRequest.body.id}/reject`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .expect(200);
+
+      expect(rejected.body.status).toBe('REJECTED');
+
+      const wallet = await request(app.getHttpServer())
+        .get('/api/wallet/me')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .expect(200);
+      expect(wallet.body.balance).toBe('30.0000');
+    });
+
+    it('rejects duplicate pending refund requests for the same transaction', async () => {
+      const admin = await createAuthenticatedUser(app, { roles: ['admin'] });
+      const user = await createAuthenticatedUser(app);
+      const deposit = await request(app.getHttpServer())
+        .post('/api/wallet/deposit')
+        .set('Authorization', `Bearer ${user.accessToken}`)
+        .send(depositBody('10.00'))
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${deposit.body.id}/refund-request`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({})
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post(`/api/wallet/transactions/${deposit.body.id}/refund-request`)
+        .set('Authorization', `Bearer ${admin.accessToken}`)
+        .send({})
+        .expect(409);
     });
   });
 });

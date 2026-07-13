@@ -119,8 +119,8 @@ export class UsersController {
       },
     },
   })
-  async getStats() {
-    return this.usersService.getUserStats();
+  async getStats(@Query() queryDto: QueryUserDTO) {
+    return this.usersService.getUserStats(queryDto.excludeEmailPrefix);
   }
 
   @Get('me')

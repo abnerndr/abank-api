@@ -1,5 +1,5 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { IsPositiveDecimalString } from '../../../shared/validators/is-positive-decimal-string.validator';
 
 export class DepositDTO {
@@ -7,14 +7,13 @@ export class DepositDTO {
   @IsPositiveDecimalString()
   amount: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     description:
       'Chave de idempotência — reenviar a mesma chave retorna a transação já processada em vez de reprocessar',
     example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
   })
-  @IsOptional()
   @IsNotEmpty()
   @IsString()
   @MaxLength(255)
-  idempotencyKey?: string;
+  idempotencyKey: string;
 }

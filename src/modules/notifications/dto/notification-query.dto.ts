@@ -1,8 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, Max, Min } from 'class-validator';
 
-export class TransactionQueryDTO {
+export class NotificationQueryDTO {
   @ApiPropertyOptional({ description: 'Página (1-indexed)', example: 1, default: 1 })
   @IsOptional()
   @Type(() => Number)
@@ -17,12 +17,4 @@ export class TransactionQueryDTO {
   @Min(1)
   @Max(100)
   limit: number = 20;
-
-  @ApiPropertyOptional({
-    description: 'Excluir carteiras cujo e-mail do usuário começa com este prefixo',
-    example: 'wallet-test-',
-  })
-  @IsOptional()
-  @IsString()
-  excludeUserEmailPrefix?: string;
 }

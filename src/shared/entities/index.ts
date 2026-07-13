@@ -1,5 +1,7 @@
 import type { EntityClassOrSchema } from '@nestjs/typeorm/dist/interfaces/entity-class-or-schema.type';
 import { LedgerEntry } from './ledger-entry.entity';
+import { Notification } from './notification.entity';
+import { RefundRequest } from './refund-request.entity';
 import { Permission } from './permission.entity';
 import { Role } from './role.entity';
 import { Transaction } from './transaction.entity';
@@ -13,5 +15,16 @@ export const entities: EntityClassOrSchema[] = [
   Wallet,
   Transaction,
   LedgerEntry,
+  Notification,
+  RefundRequest,
 ];
-export { LedgerEntry, Permission, Role, Transaction, User, Wallet };
+export {
+  LedgerEntry,
+  Notification,
+  Permission,
+  RefundRequest,
+  Role,
+  Transaction,
+  User,
+  Wallet,
+};

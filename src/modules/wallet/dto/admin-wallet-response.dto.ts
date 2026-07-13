@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { TransactionListResponseDTO } from './transaction-response.dto';
+import { AdminTransactionListResponseDTO } from './transaction-response.dto';
 import { WalletResponseDTO } from './wallet-response.dto';
 
 export class AdminWalletItemDTO extends WalletResponseDTO {
@@ -38,4 +38,4 @@ export class AdminUserWalletResponseDTO extends WalletResponseDTO {
   userName: string | null;
 }
 
-export { TransactionListResponseDTO as AdminTransactionListResponseDTO };
+export { AdminTransactionListResponseDTO } from './transaction-response.dto';

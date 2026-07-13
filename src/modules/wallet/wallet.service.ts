@@ -3,20 +3,40 @@ import { InjectRepository } from '@nestjs/typeorm';
 import Decimal from 'decimal.js';
 import { DataSource, In, QueryFailedError, Repository } from 'typeorm';
 import { v7 as uuid } from 'uuid';
-import { LedgerDirection, TransactionStatus, TransactionType } from '../../shared/enums/wallet.enum';
+import { RefundRequest } from '../../shared/entities/refund-request.entity';
+import {
+  LedgerDirection,
+  RefundRequestStatus,
+  TransactionStatus,
+  TransactionType,
+} from '../../shared/enums/wallet.enum';
 import { LedgerEntry } from '../../shared/entities/ledger-entry.entity';
 import { Transaction } from '../../shared/entities/transaction.entity';
 import { Wallet } from '../../shared/entities/wallet.entity';
+import { User } from '../../shared/entities/user.entity';
 import { UsersService } from '../users/users.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { DepositDTO } from './dto/deposit.dto';
 import {
   AdminUserWalletResponseDTO,
   AdminWalletListResponseDTO,
 } from './dto/admin-wallet-response.dto';
-import { TransactionListResponseDTO, TransactionResponseDTO } from './dto/transaction-response.dto';
+import {
+  TransactionListResponseDTO,
+  TransactionResponseDTO,
+  AdminTransactionListResponseDTO,
+} from './dto/transaction-response.dto';
 import { TransferDTO } from './dto/transfer.dto';
 import { WalletResponseDTO } from './dto/wallet-response.dto';
+import {
+  CreateRefundRequestDTO,
+  RefundRequestListResponseDTO,
+  RefundRequestResponseDTO,
+} from './dto/refund-request.dto';
 import { RecipientNotFoundException } from './exceptions/recipient-not-found.exception';
+import { RefundRequestAlreadyPendingException } from './exceptions/refund-request-already-pending.exception';
+import { RefundRequestAlreadyResolvedException } from './exceptions/refund-request-already-resolved.exception';
+import { RefundRequestNotFoundException } from './exceptions/refund-request-not-found.exception';
 import { TransactionAlreadyReversedException } from './exceptions/transaction-already-reversed.exception';
 import { WalletNotFoundException } from './exceptions/wallet-not-found.exception';
 import {
@@ -36,7 +56,10 @@ export class WalletService {
     private transactionRepository: Repository<Transaction>,
     @InjectRepository(LedgerEntry)
     private ledgerEntryRepository: Repository<LedgerEntry>,
+    @InjectRepository(RefundRequest)
+    private refundRequestRepository: Repository<RefundRequest>,
     private usersService: UsersService,
+    private notificationsService: NotificationsService,
     private dataSource: DataSource,
   ) {}
 
@@ -92,8 +115,16 @@ export class WalletService {
       take: limit,
     });
 
+    const transactionIds = transactions.map((transaction) => transaction.id);
+    const pendingRefundRequestIdByTransactionId =
+      await this.getPendingRefundRequestIdByTransactionId(transactionIds);
+
     return {
-      transactions: transactions.map((transaction) => this.toTransactionResponse(transaction)),
+      transactions: transactions.map((transaction) => ({
+        ...this.toTransactionResponse(transaction),
+        pendingRefundRequestId:
+          pendingRefundRequestIdByTransactionId.get(transaction.id) ?? null,
+      })),
       total,
       page,
       limit,
@@ -122,7 +153,14 @@ export class WalletService {
       }
     }
 
-    return this.toTransactionResponse(transaction);
+    const pendingRefundRequestIdByTransactionId =
+      await this.getPendingRefundRequestIdByTransactionId([transaction.id]);
+
+    return {
+      ...this.toTransactionResponse(transaction),
+      pendingRefundRequestId:
+        pendingRefundRequestIdByTransactionId.get(transaction.id) ?? null,
+    };
   }
 
   async getTransactionForAdmin(transactionId: string): Promise<TransactionResponseDTO> {
@@ -130,27 +168,53 @@ export class WalletService {
     if (!transaction) {
       throw new NotFoundException('Transação não encontrada');
     }
-    return this.toTransactionResponse(transaction);
+
+    const pendingRefundRequestIdByTransactionId =
+      await this.getPendingRefundRequestIdByTransactionId([transaction.id]);
+
+    return {
+      ...this.toTransactionResponse(transaction),
+      pendingRefundRequestId:
+        pendingRefundRequestIdByTransactionId.get(transaction.id) ?? null,
+    };
   }
 
-  async listAllWallets(page: number, limit: number): Promise<AdminWalletListResponseDTO> {
-    const [wallets, total] = await this.walletRepository.findAndCount({
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+  async listAllWallets(
+    page: number,
+    limit: number,
+    excludeUserEmailPrefix?: string,
+  ): Promise<AdminWalletListResponseDTO> {
+    const qb = this.walletRepository
+      .createQueryBuilder('wallet')
+      .innerJoin(User, 'user', 'user.id = wallet.userId');
 
-    const items = await Promise.all(
-      wallets.map(async (wallet) => {
-        const user = await this.usersService.findById(wallet.userId);
-        return {
-          ...this.toWalletResponse(wallet),
-          userId: wallet.userId,
-          userEmail: user?.email ?? 'unknown',
-          userName: user?.name ?? null,
-        };
-      }),
-    );
+    if (excludeUserEmailPrefix) {
+      qb.andWhere('user.email NOT LIKE :excludePrefix', {
+        excludePrefix: `${excludeUserEmailPrefix}%`,
+      });
+    }
+
+    const total = await qb.getCount();
+
+    const wallets = await qb
+      .orderBy('wallet.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getMany();
+
+    const userIds = [...new Set(wallets.map((wallet) => wallet.userId))];
+    const users = await this.usersService.findByIds(userIds);
+    const userById = new Map(users.map((user) => [user.id, user]));
+
+    const items = wallets.map((wallet) => {
+      const user = userById.get(wallet.userId);
+      return {
+        ...this.toWalletResponse(wallet),
+        userId: wallet.userId,
+        userEmail: user?.email ?? 'unknown',
+        userName: user?.name ?? null,
+      };
+    });
 
     return { wallets: items, total, page, limit };
   }
@@ -170,23 +234,253 @@ export class WalletService {
     };
   }
 
-  async listAllTransactions(page: number, limit: number): Promise<TransactionListResponseDTO> {
-    const [transactions, total] = await this.transactionRepository.findAndCount({
-      order: { createdAt: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+  async listAllTransactions(
+    page: number,
+    limit: number,
+    excludeUserEmailPrefix?: string,
+  ): Promise<AdminTransactionListResponseDTO> {
+    const qb = this.transactionRepository
+      .createQueryBuilder('tx')
+      .innerJoin(User, 'user', 'user.id = tx.requestedByUserId');
+
+    if (excludeUserEmailPrefix) {
+      qb.andWhere('user.email NOT LIKE :excludePrefix', {
+        excludePrefix: `${excludeUserEmailPrefix}%`,
+      });
+    }
+
+    const total = await qb.getCount();
+
+    const transactions = await qb
+      .orderBy('tx.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getMany();
+
+    const requesterIds = [...new Set(transactions.map((transaction) => transaction.requestedByUserId))];
+    const requesters = await this.usersService.findByIds(requesterIds);
+    const emailByUserId = new Map(requesters.map((user) => [user.id, user.email]));
+
+    const transactionIds = transactions.map((transaction) => transaction.id);
+    const pendingRefundRequestIdByTransactionId =
+      await this.getPendingRefundRequestIdByTransactionId(transactionIds);
 
     return {
-      transactions: transactions.map((transaction) => this.toTransactionResponse(transaction)),
+      transactions: transactions.map((transaction) => ({
+        ...this.toTransactionResponse(transaction),
+        requestedByUserEmail: emailByUserId.get(transaction.requestedByUserId) ?? null,
+        pendingRefundRequestId:
+          pendingRefundRequestIdByTransactionId.get(transaction.id) ?? null,
+      })),
       total,
       page,
       limit,
     };
   }
 
+  async getTransactionStats(excludeUserEmailPrefix?: string): Promise<{
+    pendingRefunds: number;
+    total: number;
+  }> {
+    const baseQb = () => {
+      const qb = this.transactionRepository
+        .createQueryBuilder('tx')
+        .innerJoin(User, 'user', 'user.id = tx.requestedByUserId');
+
+      if (excludeUserEmailPrefix) {
+        qb.andWhere('user.email NOT LIKE :excludePrefix', {
+          excludePrefix: `${excludeUserEmailPrefix}%`,
+        });
+      }
+
+      return qb;
+    };
+
+    const total = await baseQb().getCount();
+
+    const pendingRefundsQb = this.refundRequestRepository
+      .createQueryBuilder('rr')
+      .innerJoin(User, 'user', 'user.id = rr.requestedByUserId')
+      .where('rr.status = :status', { status: RefundRequestStatus.PENDING });
+
+    if (excludeUserEmailPrefix) {
+      pendingRefundsQb.andWhere('user.email NOT LIKE :excludePrefix', {
+        excludePrefix: `${excludeUserEmailPrefix}%`,
+      });
+    }
+
+    const pendingRefunds = await pendingRefundsQb.getCount();
+
+    return { pendingRefunds, total };
+  }
+
+  async createRefundRequest(
+    userId: string,
+    isAdmin: boolean,
+    transactionId: string,
+    dto: CreateRefundRequestDTO,
+  ): Promise<RefundRequestResponseDTO> {
+    const transaction = await this.transactionRepository.findOne({ where: { id: transactionId } });
+    if (!transaction) {
+      throw new NotFoundException('Transação não encontrada');
+    }
+
+    if (!isAdmin) {
+      const wallet = await this.walletRepository.findOne({ where: { userId } });
+      if (!isTransactionParticipant(transaction, userId, wallet?.id ?? null)) {
+        throw new ForbiddenException('Sem permissão para solicitar estorno desta transação');
+      }
+    }
+
+    assertReversible(transaction);
+
+    const existingPending = await this.refundRequestRepository.findOne({
+      where: { transactionId, status: RefundRequestStatus.PENDING },
+    });
+    if (existingPending) {
+      throw new RefundRequestAlreadyPendingException();
+    }
+
+    try {
+      const refundRequest = this.refundRequestRepository.create({
+        transactionId,
+        requestedByUserId: userId,
+        reason: dto.reason?.trim() || null,
+        status: RefundRequestStatus.PENDING,
+      });
+      await this.refundRequestRepository.save(refundRequest);
+      return await this.toRefundRequestResponse(refundRequest, transaction);
+    } catch (error) {
+      if (this.isRefundRequestConflict(error)) {
+        throw new RefundRequestAlreadyPendingException();
+      }
+      throw error;
+    }
+  }
+
+  async listRefundRequests(
+    page: number,
+    limit: number,
+    status: RefundRequestStatus = RefundRequestStatus.PENDING,
+    excludeUserEmailPrefix?: string,
+  ): Promise<RefundRequestListResponseDTO> {
+    const qb = this.refundRequestRepository
+      .createQueryBuilder('rr')
+      .innerJoin(User, 'user', 'user.id = rr.requestedByUserId')
+      .where('rr.status = :status', { status });
+
+    if (excludeUserEmailPrefix) {
+      qb.andWhere('user.email NOT LIKE :excludePrefix', {
+        excludePrefix: `${excludeUserEmailPrefix}%`,
+      });
+    }
+
+    const total = await qb.getCount();
+
+    const refundRequests = await qb
+      .orderBy('rr.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getMany();
+
+    const transactionIds = refundRequests.map((request) => request.transactionId);
+    const transactions =
+      transactionIds.length > 0
+        ? await this.transactionRepository.find({ where: { id: In(transactionIds) } })
+        : [];
+    const transactionById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
+
+    const requesterIds = [
+      ...new Set([
+        ...refundRequests.map((request) => request.requestedByUserId),
+        ...transactions.map((transaction) => transaction.requestedByUserId),
+      ]),
+    ];
+    const requesters = await this.usersService.findByIds(requesterIds);
+    const emailByUserId = new Map(requesters.map((user) => [user.id, user.email]));
+
+    return {
+      refundRequests: await Promise.all(
+        refundRequests.map(async (request) => {
+          const transaction = transactionById.get(request.transactionId);
+          if (!transaction) {
+            throw new NotFoundException('Transação da solicitação de estorno não encontrada');
+          }
+          return this.toRefundRequestResponse(request, transaction, emailByUserId);
+        }),
+      ),
+      total,
+      page,
+      limit,
+    };
+  }
+
+  async approveRefundRequest(
+    adminUserId: string,
+    refundRequestId: string,
+  ): Promise<RefundRequestResponseDTO> {
+    const refundRequest = await this.refundRequestRepository.findOne({
+      where: { id: refundRequestId },
+    });
+    if (!refundRequest) {
+      throw new RefundRequestNotFoundException();
+    }
+    if (refundRequest.status !== RefundRequestStatus.PENDING) {
+      throw new RefundRequestAlreadyResolvedException();
+    }
+
+    await this.reverse(adminUserId, refundRequest.transactionId);
+
+    refundRequest.status = RefundRequestStatus.APPROVED;
+    refundRequest.resolvedAt = new Date();
+    refundRequest.resolvedByUserId = adminUserId;
+    await this.refundRequestRepository.save(refundRequest);
+
+    const transaction = await this.transactionRepository.findOne({
+      where: { id: refundRequest.transactionId },
+    });
+    if (!transaction) {
+      throw new NotFoundException('Transação não encontrada');
+    }
+
+    return await this.toRefundRequestResponse(refundRequest, transaction);
+  }
+
+  async rejectRefundRequest(
+    adminUserId: string,
+    refundRequestId: string,
+  ): Promise<RefundRequestResponseDTO> {
+    const refundRequest = await this.refundRequestRepository.findOne({
+      where: { id: refundRequestId },
+    });
+    if (!refundRequest) {
+      throw new RefundRequestNotFoundException();
+    }
+    if (refundRequest.status !== RefundRequestStatus.PENDING) {
+      throw new RefundRequestAlreadyResolvedException();
+    }
+
+    refundRequest.status = RefundRequestStatus.REJECTED;
+    refundRequest.resolvedAt = new Date();
+    refundRequest.resolvedByUserId = adminUserId;
+    await this.refundRequestRepository.save(refundRequest);
+
+    const transaction = await this.transactionRepository.findOne({
+      where: { id: refundRequest.transactionId },
+    });
+    if (!transaction) {
+      throw new NotFoundException('Transação não encontrada');
+    }
+
+    return await this.toRefundRequestResponse(refundRequest, transaction);
+  }
+
   async deposit(userId: string, dto: DepositDTO): Promise<TransactionResponseDTO> {
-    const existing = await this.findIdempotentTransaction(userId, dto.idempotencyKey);
+    const existing = await this.findIdempotentTransaction(
+      userId,
+      TransactionType.DEPOSIT,
+      dto.idempotencyKey,
+    );
     if (existing) {
       return this.toTransactionResponse(existing);
     }
@@ -213,7 +507,7 @@ export class WalletService {
           amount,
           toWalletId: wallet.id,
           requestedByUserId: userId,
-          idempotencyKey: dto.idempotencyKey ?? null,
+          idempotencyKey: dto.idempotencyKey,
         });
         await manager.getRepository(Transaction).save(transaction);
 
@@ -229,8 +523,12 @@ export class WalletService {
         return this.toTransactionResponse(transaction);
       });
     } catch (error) {
-      if (dto.idempotencyKey && this.isIdempotencyKeyConflict(error)) {
-        const replay = await this.findIdempotentTransaction(userId, dto.idempotencyKey);
+      if (this.isIdempotencyKeyConflict(error)) {
+        const replay = await this.findIdempotentTransaction(
+          userId,
+          TransactionType.DEPOSIT,
+          dto.idempotencyKey,
+        );
         if (replay) {
           return this.toTransactionResponse(replay);
         }
@@ -240,7 +538,11 @@ export class WalletService {
   }
 
   async transfer(userId: string, dto: TransferDTO): Promise<TransactionResponseDTO> {
-    const existing = await this.findIdempotentTransaction(userId, dto.idempotencyKey);
+    const existing = await this.findIdempotentTransaction(
+      userId,
+      TransactionType.TRANSFER,
+      dto.idempotencyKey,
+    );
     if (existing) {
       return this.toTransactionResponse(existing);
     }
@@ -256,7 +558,7 @@ export class WalletService {
     const amount = new Decimal(dto.amount);
 
     try {
-      return await this.dataSource.transaction(async (manager) => {
+      const result = await this.dataSource.transaction(async (manager) => {
         const walletRepository = manager.getRepository(Wallet);
         // Lock in a deterministic order (sorted user id) regardless of who is sender/receiver,
         // so two transfers between the same pair of wallets in opposite directions can never
@@ -289,7 +591,7 @@ export class WalletService {
           fromWalletId: source.id,
           toWalletId: destination.id,
           requestedByUserId: userId,
-          idempotencyKey: dto.idempotencyKey ?? null,
+          idempotencyKey: dto.idempotencyKey,
         });
         await manager.getRepository(Transaction).save(transaction);
 
@@ -312,9 +614,22 @@ export class WalletService {
 
         return this.toTransactionResponse(transaction);
       });
+
+      const sender = await this.usersService.findById(userId);
+      await this.notificationsService.createTransferNotification(recipient.id, {
+        fromUserEmail: sender.email,
+        amount: dto.amount,
+        transactionId: result.id,
+      });
+
+      return result;
     } catch (error) {
-      if (dto.idempotencyKey && this.isIdempotencyKeyConflict(error)) {
-        const replay = await this.findIdempotentTransaction(userId, dto.idempotencyKey);
+      if (this.isIdempotencyKeyConflict(error)) {
+        const replay = await this.findIdempotentTransaction(
+          userId,
+          TransactionType.TRANSFER,
+          dto.idempotencyKey,
+        );
         if (replay) {
           return this.toTransactionResponse(replay);
         }
@@ -433,12 +748,12 @@ export class WalletService {
 
   private async findIdempotentTransaction(
     requestedByUserId: string,
-    idempotencyKey?: string,
+    type: TransactionType,
+    idempotencyKey: string,
   ): Promise<Transaction | null> {
-    if (!idempotencyKey) {
-      return null;
-    }
-    return this.transactionRepository.findOne({ where: { requestedByUserId, idempotencyKey } });
+    return this.transactionRepository.findOne({
+      where: { requestedByUserId, type, idempotencyKey },
+    });
   }
 
   private isIdempotencyKeyConflict(error: unknown): boolean {
@@ -453,6 +768,14 @@ export class WalletService {
     // narrowly scoped to the idempotency constraint rather than any other unique violation.
     const driverError = error as QueryFailedError & { code?: string; detail?: string };
     return driverError.code === '23505' && !!driverError.detail?.includes('idempotency_key');
+  }
+
+  private isRefundRequestConflict(error: unknown): boolean {
+    if (!(error instanceof QueryFailedError)) {
+      return false;
+    }
+    const driverError = error as QueryFailedError & { code?: string; detail?: string };
+    return driverError.code === '23505' && !!driverError.detail?.includes('transaction_id');
   }
 
   private isReversalConflict(error: unknown): boolean {
@@ -477,6 +800,25 @@ export class WalletService {
     };
   }
 
+  private async getPendingRefundRequestIdByTransactionId(
+    transactionIds: string[],
+  ): Promise<Map<string, string>> {
+    if (transactionIds.length === 0) {
+      return new Map();
+    }
+
+    const pendingRefundRequests = await this.refundRequestRepository.find({
+      where: {
+        transactionId: In(transactionIds),
+        status: RefundRequestStatus.PENDING,
+      },
+    });
+
+    return new Map(
+      pendingRefundRequests.map((request) => [request.transactionId, request.id]),
+    );
+  }
+
   private toTransactionResponse(transaction: Transaction): TransactionResponseDTO {
     return {
       id: transaction.id,
@@ -489,6 +831,42 @@ export class WalletService {
       requestedByUserId: transaction.requestedByUserId,
       idempotencyKey: transaction.idempotencyKey,
       createdAt: transaction.createdAt,
+      pendingRefundRequestId: null,
+    };
+  }
+
+  private async toRefundRequestResponse(
+    refundRequest: RefundRequest,
+    transaction: Transaction,
+    emailByUserId?: Map<string, string>,
+  ): Promise<RefundRequestResponseDTO> {
+    const emails =
+      emailByUserId ??
+      new Map(
+        (
+          await this.usersService.findByIds([
+            refundRequest.requestedByUserId,
+            transaction.requestedByUserId,
+          ])
+        ).map((user) => [user.id, user.email]),
+      );
+
+    return {
+      id: refundRequest.id,
+      transactionId: refundRequest.transactionId,
+      status: refundRequest.status,
+      requestedByUserId: refundRequest.requestedByUserId,
+      requestedByUserEmail: emails.get(refundRequest.requestedByUserId) ?? null,
+      reason: refundRequest.reason,
+      createdAt: refundRequest.createdAt,
+      resolvedAt: refundRequest.resolvedAt,
+      resolvedByUserId: refundRequest.resolvedByUserId,
+      transaction: {
+        ...this.toTransactionResponse(transaction),
+        requestedByUserEmail: emails.get(transaction.requestedByUserId) ?? null,
+        pendingRefundRequestId:
+          refundRequest.status === RefundRequestStatus.PENDING ? refundRequest.id : null,
+      },
     };
   }
 }

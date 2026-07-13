@@ -39,6 +39,14 @@ export class QueryUserDTO {
   isVerified?: boolean;
 
   @ApiPropertyOptional({
+    description: 'Excluir e-mails que começam com este prefixo (ex.: wallet-test-)',
+    example: 'wallet-test-',
+  })
+  @IsOptional()
+  @IsString()
+  excludeEmailPrefix?: string;
+
+  @ApiPropertyOptional({
     description: 'Ordenar por campo',
     example: 'createdAt',
     enum: ['name', 'email', 'createdAt', 'updatedAt'],

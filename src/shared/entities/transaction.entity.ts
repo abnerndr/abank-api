@@ -6,7 +6,7 @@ import { decimalTransformer } from '../utils/decimal.transformer';
 
 @Entity('transactions')
 @Check(`"amount" > 0`)
-@Index(['requestedByUserId', 'idempotencyKey'], {
+@Index(['requestedByUserId', 'type', 'idempotencyKey'], {
   unique: true,
   where: '"idempotency_key" IS NOT NULL',
 })
